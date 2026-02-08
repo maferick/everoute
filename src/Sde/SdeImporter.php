@@ -183,7 +183,7 @@ final class SdeImporter
             $rows[] = [
                 'station_id' => $stationId,
                 'system_id' => $systemId,
-                'name' => (string) ($row['stationName'] ?? $row['name'] ?? 'Unknown'),
+                'name' => $this->normalizeName($row['stationName'] ?? $row['name'] ?? null, 'Unknown'),
                 'is_npc' => 1,
                 'updated_at' => $now,
             ];
@@ -271,7 +271,7 @@ final class SdeImporter
     private function mapSystemRow(array $row, string $now): array
     {
         $id = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['id'] ?? 0);
-        $name = (string) ($row['solarSystemName'] ?? $row['name'] ?? 'Unknown');
+        $name = $this->normalizeName($row['solarSystemName'] ?? $row['name'] ?? null, 'Unknown');
         $security = (float) ($row['security'] ?? $row['securityStatus'] ?? 0.0);
         $regionId = $row['regionID'] ?? $row['regionId'] ?? $row['region_id'] ?? null;
         $constellationId = $row['constellationID'] ?? $row['constellationId'] ?? $row['constellation_id'] ?? null;
@@ -292,5 +292,27 @@ final class SdeImporter
             'system_size_au' => $systemSize,
             'updated_at' => $now,
         ];
+    }
+
+    private function normalizeName(mixed $value, string $fallback): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+
+        if (is_array($value)) {
+            $english = $value['en'] ?? null;
+            if (is_string($english)) {
+                return $english;
+            }
+
+            foreach ($value as $item) {
+                if (is_string($item)) {
+                    return $item;
+                }
+            }
+        }
+
+        return $fallback;
     }
 }
