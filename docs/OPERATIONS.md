@@ -64,3 +64,44 @@ Sample cron:
 ```bash
 php bin/console cache:warm
 ```
+
+## Offline Precompute Jobs (SDE-stable)
+These jobs are heavy and intended for long-running offline execution. They are resumable via DB checkpoints and safe to stop/restart. All outputs remain valid until the SDE/map changes.
+
+### System facts (fast)
+Recompute regional gates and NPC station flags:
+```bash
+php bin/console precompute:system-facts
+```
+
+### Gate hop distances (large)
+Stores hop counts only (no full paths). To keep storage reasonable, the job limits stored hops to a maximum threshold (default 20). You can run for hours/days and resume.
+```bash
+# conservative default (1 hour)
+php bin/console precompute:gate-distances --hours=1 --max-hops=20
+
+# run for a day and resume as needed
+php bin/console precompute:gate-distances --hours=24 --resume --max-hops=20
+
+# limit to specific sources
+php bin/console precompute:gate-distances --source-ids=30000142,30000144 --max-hops=15
+```
+
+### Jump neighbors (large)
+Precomputes reachable neighbors within configured jump ranges and stores compressed adjacency blobs (`gzcompress`).
+```bash
+# default ranges from config/jump_ranges.php
+php bin/console precompute:jump-neighbors --hours=1
+
+# explicit ranges
+php bin/console precompute:jump-neighbors --ranges=5,6,7,8,9,10 --hours=24 --resume
+```
+
+### Performance tuning knobs
+- `--sleep=0.05` adds backoff between systems to reduce DB load.
+- `--hours=0` disables the time limit.
+- `--resume` continues from the last checkpoint in `precompute_checkpoints`.
+
+### Operational notes
+- Run precompute jobs after every SDE update (`sde:update` or `sde:install`).
+- Gate distance usage at runtime is gated by the data present in `gate_distances`; missing data falls back to geometry heuristics.

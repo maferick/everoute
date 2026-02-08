@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Everoute\Routing;
 
 use Everoute\Cache\RedisCache;
+use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
 use Everoute\Security\Logger;
+use Everoute\Universe\GateDistanceRepository;
 use Everoute\Universe\StargateRepository;
 use Everoute\Universe\SystemRepository;
 use Everoute\Routing\JumpMath;
@@ -23,6 +25,9 @@ final class RouteService
     private array $gateNeighbors = [];
     private array $adjacency = [];
     private array $reverseAdjacency = [];
+    private ?GateDistanceRepository $gateDistancesRepo;
+    /** @var array<int, array<int, int>> */
+    private array $gateDistanceCache = [];
 
     public function __construct(
         private SystemRepository $systemsRepo,
@@ -34,8 +39,10 @@ final class RouteService
         private Logger $logger,
         private ?RedisCache $cache = null,
         private int $routeCacheTtlSeconds = 600,
-        private int $riskCacheTtlSeconds = 60
+        private int $riskCacheTtlSeconds = 60,
+        ?GateDistanceRepository $gateDistancesRepo = null
     ) {
+        $this->gateDistancesRepo = $gateDistancesRepo;
         $this->loadData();
     }
 
@@ -688,6 +695,7 @@ final class RouteService
     {
         GraphStore::load($this->systemsRepo, $this->stargatesRepo, $this->logger);
         $this->systems = GraphStore::systems();
+        $this->gateDistanceCache = [];
 
         $this->risk = [];
         $now = time();
@@ -730,6 +738,11 @@ final class RouteService
             return [];
         }
 
+        $gateCorridor = $this->buildGateDistanceCorridor($startId, $endId);
+        if ($gateCorridor !== null) {
+            return $gateCorridor;
+        }
+
         $direct = JumpMath::distanceLy($start, $end);
         $limit = $direct * 3.0;
         $allowed = [];
@@ -744,6 +757,43 @@ final class RouteService
         $allowed[$startId] = true;
         $allowed[$endId] = true;
 
+        return $allowed;
+    }
+
+    /** @return array<int, bool>|null */
+    private function buildGateDistanceCorridor(int $startId, int $endId): ?array
+    {
+        if ($this->gateDistancesRepo === null) {
+            return null;
+        }
+
+        $maxHops = Env::int('GATE_DISTANCE_MAX_HOPS', 20);
+        $flex = Env::int('GATE_CORRIDOR_HOP_FLEX', 6);
+        $startDistances = $this->gateDistanceCache[$startId] ?? $this->gateDistancesRepo->distancesFrom($startId, $maxHops);
+        $this->gateDistanceCache[$startId] = $startDistances;
+        $endDistances = $this->gateDistanceCache[$endId] ?? $this->gateDistancesRepo->distancesFrom($endId, $maxHops);
+        $this->gateDistanceCache[$endId] = $endDistances;
+
+        $direct = $startDistances[$endId] ?? null;
+        if ($direct === null) {
+            return null;
+        }
+
+        $limit = $direct + $flex;
+        $allowed = [];
+        foreach ($startDistances as $node => $hops) {
+            $back = $endDistances[$node] ?? null;
+            if ($back !== null && ($hops + $back) <= $limit) {
+                $allowed[(int) $node] = true;
+            }
+        }
+
+        if ($allowed === []) {
+            return null;
+        }
+
+        $allowed[$startId] = true;
+        $allowed[$endId] = true;
         return $allowed;
     }
 

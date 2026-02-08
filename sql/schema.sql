@@ -26,6 +26,28 @@ CREATE TABLE IF NOT EXISTS stargates (
     CONSTRAINT fk_stargate_to FOREIGN KEY (to_system_id) REFERENCES systems (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS gate_distances (
+    from_system_id BIGINT NOT NULL,
+    to_system_id BIGINT NOT NULL,
+    hops SMALLINT UNSIGNED NOT NULL,
+    PRIMARY KEY (from_system_id, to_system_id),
+    INDEX idx_gate_dist_to (to_system_id),
+    INDEX idx_gate_dist_hops (from_system_id, hops),
+    CONSTRAINT fk_gate_dist_from FOREIGN KEY (from_system_id) REFERENCES systems (id) ON DELETE CASCADE,
+    CONSTRAINT fk_gate_dist_to FOREIGN KEY (to_system_id) REFERENCES systems (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS jump_neighbors (
+    system_id BIGINT NOT NULL,
+    range_bucket SMALLINT UNSIGNED NOT NULL,
+    neighbor_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    neighbor_ids_blob MEDIUMBLOB NOT NULL,
+    updated_at DATETIME NOT NULL,
+    PRIMARY KEY (system_id, range_bucket),
+    INDEX idx_jump_neighbors_range (range_bucket),
+    CONSTRAINT fk_jump_neighbors_system FOREIGN KEY (system_id) REFERENCES systems (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS stations (
     station_id BIGINT PRIMARY KEY,
     system_id BIGINT NOT NULL,
@@ -72,6 +94,14 @@ CREATE TABLE IF NOT EXISTS route_cache (
     cache_key VARCHAR(128) PRIMARY KEY,
     payload JSON NOT NULL,
     created_at DATETIME NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS precompute_checkpoints (
+    job_key VARCHAR(64) PRIMARY KEY,
+    cursor BIGINT NULL,
+    meta JSON NULL,
+    started_at DATETIME NULL,
+    updated_at DATETIME NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS risk_import_jobs (
