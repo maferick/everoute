@@ -26,6 +26,7 @@ final class SdeImporter
 
         $now = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
+        $this->ensureSchema($pdo);
         $this->createStageTables($pdo);
 
         $this->loadSystems($pdo, $paths['systems'], $now, $progress);
@@ -100,6 +101,86 @@ final class SdeImporter
             INDEX idx_station_system (system_id),
             updated_at DATETIME NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    }
+
+    private function ensureSchema(PDO $pdo): void
+    {
+        $pdo->exec('CREATE TABLE IF NOT EXISTS systems (
+            id BIGINT PRIMARY KEY,
+            name VARCHAR(128) NOT NULL UNIQUE,
+            security DECIMAL(4,2) NOT NULL,
+            region_id BIGINT NULL,
+            constellation_id BIGINT NULL,
+            x DOUBLE NOT NULL DEFAULT 0,
+            y DOUBLE NOT NULL DEFAULT 0,
+            z DOUBLE NOT NULL DEFAULT 0,
+            system_size_au DOUBLE NOT NULL DEFAULT 1.0,
+            updated_at DATETIME NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+
+        $pdo->exec('CREATE TABLE IF NOT EXISTS stargates (
+            id BIGINT PRIMARY KEY,
+            from_system_id BIGINT NOT NULL,
+            to_system_id BIGINT NOT NULL,
+            updated_at DATETIME NOT NULL,
+            INDEX idx_from_system (from_system_id),
+            INDEX idx_to_system (to_system_id),
+            CONSTRAINT fk_stargate_from FOREIGN KEY (from_system_id) REFERENCES systems (id) ON DELETE CASCADE,
+            CONSTRAINT fk_stargate_to FOREIGN KEY (to_system_id) REFERENCES systems (id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+
+        $pdo->exec('CREATE TABLE IF NOT EXISTS stations (
+            station_id BIGINT PRIMARY KEY,
+            system_id BIGINT NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            type VARCHAR(128) NOT NULL DEFAULT "npc",
+            is_npc TINYINT(1) NOT NULL DEFAULT 1,
+            updated_at DATETIME NOT NULL,
+            INDEX idx_station_system (system_id),
+            CONSTRAINT fk_station_system FOREIGN KEY (system_id) REFERENCES systems (id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+
+        $pdo->exec('CREATE TABLE IF NOT EXISTS sde_meta (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            build_number BIGINT NOT NULL,
+            variant VARCHAR(64) NOT NULL,
+            installed_at DATETIME NOT NULL,
+            source_url VARCHAR(255) NOT NULL,
+            notes TEXT NULL,
+            INDEX idx_sde_meta_build (build_number),
+            INDEX idx_sde_meta_installed (installed_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+
+        $this->ensureStationTypeColumn($pdo);
+        $this->ensureStationColumn($pdo, 'is_npc', 'TINYINT(1) NOT NULL DEFAULT 1');
+        $this->ensureStationColumn($pdo, 'updated_at', 'DATETIME NOT NULL');
+    }
+
+    private function ensureStationTypeColumn(PDO $pdo): void
+    {
+        if (!$this->tableHasColumn($pdo, 'stations', 'type')) {
+            $pdo->exec("ALTER TABLE stations ADD COLUMN type VARCHAR(128) NOT NULL DEFAULT 'npc' AFTER name");
+            return;
+        }
+
+        $stmt = $pdo->prepare(
+            'SELECT is_nullable, column_default FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = :table AND column_name = :column'
+        );
+        $stmt->execute(['table' => 'stations', 'column' => 'type']);
+        $info = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $isNullable = ($info['is_nullable'] ?? 'YES') === 'YES';
+        $default = $info['column_default'] ?? null;
+
+        if ($isNullable || $default === null || $default === '') {
+            $pdo->exec("ALTER TABLE stations MODIFY COLUMN type VARCHAR(128) NOT NULL DEFAULT 'npc'");
+        }
+    }
+
+    private function ensureStationColumn(PDO $pdo, string $column, string $definition): void
+    {
+        if (!$this->tableHasColumn($pdo, 'stations', $column)) {
+            $pdo->exec(sprintf('ALTER TABLE stations ADD COLUMN %s %s', $column, $definition));
+        }
     }
 
     private function loadSystems(PDO $pdo, string $path, string $now, ?callable $progress): void
