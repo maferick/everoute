@@ -7,13 +7,15 @@ CREATE TABLE IF NOT EXISTS systems (
     x DOUBLE NOT NULL DEFAULT 0,
     y DOUBLE NOT NULL DEFAULT 0,
     z DOUBLE NOT NULL DEFAULT 0,
-    system_size_au DOUBLE NOT NULL DEFAULT 1.0
+    system_size_au DOUBLE NOT NULL DEFAULT 1.0,
+    updated_at DATETIME NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS stargates (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     from_system_id BIGINT NOT NULL,
     to_system_id BIGINT NOT NULL,
+    updated_at DATETIME NOT NULL,
     INDEX idx_from_system (from_system_id),
     INDEX idx_to_system (to_system_id),
     CONSTRAINT fk_stargate_from FOREIGN KEY (from_system_id) REFERENCES systems (id) ON DELETE CASCADE,
@@ -24,8 +26,9 @@ CREATE TABLE IF NOT EXISTS stations (
     station_id BIGINT PRIMARY KEY,
     system_id BIGINT NOT NULL,
     name VARCHAR(255) NOT NULL,
-    type VARCHAR(128) NOT NULL,
+    type VARCHAR(128) NOT NULL DEFAULT 'npc',
     is_npc TINYINT(1) NOT NULL DEFAULT 1,
+    updated_at DATETIME NOT NULL,
     INDEX idx_station_system (system_id),
     CONSTRAINT fk_station_system FOREIGN KEY (system_id) REFERENCES systems (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -63,4 +66,15 @@ CREATE TABLE IF NOT EXISTS risk_import_jobs (
     started_at DATETIME NULL,
     finished_at DATETIME NULL,
     message TEXT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS sde_meta (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    build_number BIGINT NOT NULL,
+    variant VARCHAR(64) NOT NULL,
+    installed_at DATETIME NOT NULL,
+    source_url VARCHAR(255) NOT NULL,
+    notes TEXT NULL,
+    INDEX idx_sde_meta_build (build_number),
+    INDEX idx_sde_meta_installed (installed_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
