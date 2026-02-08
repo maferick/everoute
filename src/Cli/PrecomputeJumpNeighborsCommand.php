@@ -44,7 +44,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
             $output->writeln('<error>Missing jump_neighbors table. Run sql/schema.sql to initialize the database schema.</error>');
             return Command::FAILURE;
         }
-        $rangeColumn = $this->resolveRangeColumn($pdo);
+        $rangeColumn = $this->ensureRangeColumn($pdo, $output);
         if ($rangeColumn === null) {
             $output->writeln('<error>Missing range column on jump_neighbors. Expected range_ly or range.</error>');
             return Command::FAILURE;
@@ -268,5 +268,83 @@ final class PrecomputeJumpNeighborsCommand extends Command
             return 'range';
         }
         return null;
+    }
+
+    private function ensureRangeColumn(\PDO $pdo, OutputInterface $output): ?string
+    {
+        $rangeColumn = $this->resolveRangeColumn($pdo);
+        if ($rangeColumn !== null) {
+            return $rangeColumn;
+        }
+
+        $output->writeln('<comment>Missing range column on jump_neighbors. Attempting to add range_ly...</comment>');
+
+        if (!$this->columnExists($pdo, 'jump_neighbors', 'range_ly')) {
+            $pdo->exec('ALTER TABLE jump_neighbors ADD COLUMN range_ly SMALLINT UNSIGNED NOT NULL DEFAULT 1 AFTER system_id');
+        }
+
+        $this->ensurePrimaryKey($pdo, ['system_id', 'range_ly']);
+        $this->ensureIndex($pdo, 'jump_neighbors', 'idx_jump_neighbors_range', 'range_ly');
+
+        return $this->resolveRangeColumn($pdo);
+    }
+
+    private function columnExists(\PDO $pdo, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare(
+            'SELECT 1 FROM information_schema.columns
+             WHERE table_schema = DATABASE()
+               AND table_name = :table
+               AND column_name = :column'
+        );
+        $stmt->execute(['table' => $table, 'column' => $column]);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /** @param string[] $columns */
+    private function ensurePrimaryKey(\PDO $pdo, array $columns): void
+    {
+        $stmt = $pdo->prepare(
+            'SELECT column_name FROM information_schema.key_column_usage
+             WHERE table_schema = DATABASE()
+               AND table_name = :table
+               AND constraint_name = :constraint
+             ORDER BY ordinal_position'
+        );
+        $stmt->execute(['table' => 'jump_neighbors', 'constraint' => 'PRIMARY']);
+        $existing = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+        if ($existing === $columns) {
+            return;
+        }
+
+        if ($existing !== []) {
+            $pdo->exec('ALTER TABLE jump_neighbors DROP PRIMARY KEY');
+        }
+
+        $pdo->exec(sprintf(
+            'ALTER TABLE jump_neighbors ADD PRIMARY KEY (%s)',
+            implode(', ', $columns)
+        ));
+    }
+
+    private function ensureIndex(\PDO $pdo, string $table, string $index, string $column): void
+    {
+        $stmt = $pdo->prepare(
+            'SELECT 1 FROM information_schema.statistics
+             WHERE table_schema = DATABASE()
+               AND table_name = :table
+               AND index_name = :index'
+        );
+        $stmt->execute(['table' => $table, 'index' => $index]);
+        if ($stmt->fetchColumn()) {
+            return;
+        }
+
+        $pdo->exec(sprintf(
+            'ALTER TABLE %s ADD INDEX %s (%s)',
+            $table,
+            $index,
+            $column
+        ));
     }
 }
