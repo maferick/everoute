@@ -23,7 +23,9 @@ Request JSON:
 Notes:
 - `jump_ship_type` and `jump_skill_level` are used for jump-assisted planning in Capital/JF mode.
 - Hybrid planning uses gate-to-launch plus jump chain with optional landing gate segment. Configure hop limits with `HYBRID_LAUNCH_MAX_GATES` (default 6) and `HYBRID_LANDING_MAX_GATES` (default 3).
+- Avoid low/null-sec settings are treated as soft penalties for jump planning (they influence scoring but do not hard-block jump chains).
 - When routes are not feasible (e.g. capital start/end in high-sec), the response includes `error` and `reason`.
+- When `APP_DEBUG=true`, jump planning responses include a `debug` object with candidate/edge counts and max segment distance.
 
 Response (truncated):
 ```json
@@ -61,7 +63,13 @@ Response (truncated):
           "jump_fatigue_estimate_minutes": 64.5,
           "jump_fatigue_risk_label": "low",
           "jump_segments": [{"from": "Jita", "to": "Niarja", "distance_ly": 4.2}],
-          "midpoints": ["Niarja"]
+          "midpoints": ["Niarja"],
+          "debug": {
+            "candidate_systems_evaluated": 1200,
+            "edges_built": 640,
+            "max_segment_distance_ly": 6.8,
+            "chain_length": 2
+          }
         },
         "hybrid": {
           "feasible": true,
