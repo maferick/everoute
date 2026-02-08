@@ -21,6 +21,7 @@ final class FetchRiskCommand extends Command
     protected function configure(): void
     {
         $this
+            ->setName(self::$defaultName)
             ->setDescription('Fetch risk data from zKillboard (optional)')
             ->addOption('limit', null, InputOption::VALUE_REQUIRED, 'Limit number of systems', 200);
     }

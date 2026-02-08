@@ -20,6 +20,7 @@ final class ImportUniverseCommand extends Command
     protected function configure(): void
     {
         $this
+            ->setName(self::$defaultName)
             ->setDescription('Import universe data from JSON or CSV')
             ->addOption('file', null, InputOption::VALUE_REQUIRED, 'Path to data file')
             ->addOption('format', null, InputOption::VALUE_REQUIRED, 'json|csv', 'json');
