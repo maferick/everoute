@@ -85,6 +85,46 @@ final class RedisCache
         $this->set($key, json_encode($value, JSON_UNESCAPED_SLASHES), $ttlSeconds);
     }
 
+    public function ping(): bool
+    {
+        try {
+            $pong = $this->client->ping();
+        } catch (RedisException) {
+            return false;
+        }
+
+        return $pong !== false;
+    }
+
+    public function stats(): array
+    {
+        try {
+            $info = $this->client->info();
+        } catch (RedisException) {
+            return ['connected' => false];
+        }
+
+        $keys = null;
+        if (isset($info['db0']) && is_array($info['db0'])) {
+            $keys = $info['db0']['keys'] ?? null;
+        } elseif (isset($info['db0']) && is_string($info['db0'])) {
+            $parts = explode(',', $info['db0']);
+            foreach ($parts as $part) {
+                if (str_starts_with($part, 'keys=')) {
+                    $keys = (int) substr($part, 5);
+                }
+            }
+        }
+
+        return [
+            'connected' => true,
+            'keys' => $keys,
+            'keyspace_hits' => $info['keyspace_hits'] ?? null,
+            'keyspace_misses' => $info['keyspace_misses'] ?? null,
+            'used_memory' => $info['used_memory_human'] ?? ($info['used_memory'] ?? null),
+        ];
+    }
+
     public function delete(string $key): void
     {
         try {

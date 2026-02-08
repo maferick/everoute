@@ -15,7 +15,6 @@ use Everoute\Routing\RouteService;
 use Everoute\Routing\WeightCalculator;
 use Everoute\Security\Logger;
 use Everoute\Universe\StargateRepository;
-use Everoute\Universe\StationRepository;
 use Everoute\Universe\SystemRepository;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -39,15 +38,19 @@ final class CacheWarmCommand extends Command
         $connection = $this->connection();
         $riskCache = RedisCache::fromEnv();
         $riskCacheTtl = Env::int('RISK_CACHE_TTL_SECONDS', 60);
+        $heatmapTtl = Env::int('RISK_HEATMAP_TTL_SECONDS', 30);
+        $routeCacheTtl = Env::int('ROUTE_CACHE_TTL_SECONDS', 600);
         $service = new RouteService(
             new SystemRepository($connection),
             new StargateRepository($connection),
-            new StationRepository($connection),
-            new RiskRepository($connection, $riskCache, $riskCacheTtl),
+            new RiskRepository($connection, $riskCache, $riskCacheTtl, $heatmapTtl),
             $weightCalculator = new WeightCalculator(),
             $movementRules = new MovementRules(),
             new JumpPlanner(new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php'), $weightCalculator, $movementRules, new JumpFatigueModel()),
-            new Logger()
+            new Logger(),
+            $riskCache,
+            $routeCacheTtl,
+            $riskCacheTtl
         );
         $service->refresh();
         $output->writeln('<info>Cache warmed.</info>');
