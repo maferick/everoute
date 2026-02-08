@@ -19,6 +19,7 @@ final class ImportRiskCommand extends Command
     protected function configure(): void
     {
         $this
+            ->setName(self::$defaultName)
             ->setDescription('Import risk data from JSON or CSV')
             ->addOption('file', null, InputOption::VALUE_REQUIRED, 'Path to risk file')
             ->addOption('format', null, InputOption::VALUE_REQUIRED, 'json|csv', 'json');

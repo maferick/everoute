@@ -24,7 +24,9 @@ final class CacheWarmCommand extends Command
 
     protected function configure(): void
     {
-        $this->setDescription('Warm route data cache');
+        $this
+            ->setName(self::$defaultName)
+            ->setDescription('Warm route data cache');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
