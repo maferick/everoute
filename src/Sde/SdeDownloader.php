@@ -39,7 +39,7 @@ final class SdeDownloader
         $this->http->download($this->config->baseUrl . '/latest.jsonl', $latestPath);
 
         foreach (SdeJsonlReader::read($latestPath) as $record) {
-            if (($record['key'] ?? null) !== 'sde') {
+            if (($record['key'] ?? $record['_key'] ?? null) !== 'sde') {
                 continue;
             }
 
