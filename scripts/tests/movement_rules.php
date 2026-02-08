@@ -5,12 +5,16 @@ declare(strict_types=1);
 require __DIR__ . '/../../src/Routing/MovementRules.php';
 require __DIR__ . '/../../src/Routing/JumpRangeCalculator.php';
 require __DIR__ . '/../../src/Routing/JumpPlanner.php';
+require __DIR__ . '/../../src/Routing/JumpFatigueModel.php';
 require __DIR__ . '/../../src/Routing/WeightCalculator.php';
+require __DIR__ . '/../../src/Security/Logger.php';
 
 use Everoute\Routing\JumpPlanner;
+use Everoute\Routing\JumpFatigueModel;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\MovementRules;
 use Everoute\Routing\WeightCalculator;
+use Everoute\Security\Logger;
 
 function ensure(bool $condition, string $message): void
 {
@@ -29,7 +33,7 @@ ensure(!$rules->isSystemAllowed($highSec, $options), 'Capital ships should not e
 ensure($rules->validateEndpoints($highSec, $lowSec, $options) !== null, 'High-sec endpoints must be rejected.');
 
 $rangeCalculator = new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php');
-$planner = new JumpPlanner($rangeCalculator, new WeightCalculator(), $rules);
+$planner = new JumpPlanner($rangeCalculator, new WeightCalculator(), $rules, new JumpFatigueModel(), new Logger());
 
 $ly = 9.4607e15;
 $systems = [

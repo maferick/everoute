@@ -54,7 +54,7 @@ $riskRepo = new RiskRepository($connection, $riskCache, $riskCacheTtl, $heatmapT
 $weightCalculator = new WeightCalculator();
 $movementRules = new MovementRules();
 $jumpRanges = new JumpRangeCalculator(__DIR__ . '/../config/jump_ranges.php');
-$jumpPlanner = new JumpPlanner($jumpRanges, $weightCalculator, $movementRules, new JumpFatigueModel());
+$jumpPlanner = new JumpPlanner($jumpRanges, $weightCalculator, $movementRules, new JumpFatigueModel(), $logger);
 
 $routeService = new RouteService(
     $systems,
