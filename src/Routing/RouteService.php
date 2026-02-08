@@ -20,6 +20,7 @@ final class RouteService
     private array $risk = [];
     private array $chokepoints = [];
     private Graph $graph;
+    private array $gateNeighbors = [];
     private array $adjacency = [];
     private array $reverseAdjacency = [];
 
@@ -107,15 +108,18 @@ final class RouteService
 
     private function computeRoute(int $startId, int $endId, array $options, array $weights): array
     {
-        $dijkstra = new Dijkstra();
         $avoidLow = $options['avoid_lowsec'] ?? false;
         $avoidNull = $options['avoid_nullsec'] ?? false;
         $avoidSystems = $options['avoid_systems'] ?? [];
         $avoidSet = array_fill_keys($avoidSystems, true);
 
-        $costFn = $this->buildGateCostFn($options, $weights, $avoidLow, $avoidNull, $avoidSet);
-
-        $pathResult = $dijkstra->shortestPath($this->graph, $startId, $endId, $costFn);
+        $pathResult = $this->computeGatePath($startId, $endId, $options, $weights, $avoidLow, $avoidNull, $avoidSet);
+        $this->logger->info('Route search metrics', [
+            'type' => 'gate',
+            'nodes_explored' => $pathResult['nodes_explored'],
+            'duration_ms' => round($pathResult['duration_ms'], 2),
+            'status' => $pathResult['status'],
+        ]);
 
         if (empty($pathResult['path'])) {
             return ['error' => 'No route found'];
@@ -152,6 +156,7 @@ final class RouteService
                 'fatigue_minutes_estimate' => $jumpPlan['jump_fatigue_estimate_minutes'] ?? null,
                 'fatigue_risk' => $jumpPlan['jump_fatigue_risk_label'] ?? null,
             ];
+            $hybridStart = microtime(true);
             $plans['hybrid'] = $this->computeHybridPlan(
                 $startId,
                 $endId,
@@ -159,11 +164,19 @@ final class RouteService
                 $weights,
                 $jumpPlan
             );
+            $hybridDurationMs = (microtime(true) - $hybridStart) * 1000;
+            $this->logger->info('Route search metrics', [
+                'type' => 'hybrid',
+                'nodes_explored' => $plans['hybrid']['candidates_evaluated'] ?? 0,
+                'duration_ms' => round($hybridDurationMs, 2),
+                'status' => !empty($plans['hybrid']['feasible']) ? 'success' : 'failed',
+            ]);
 
             $plans['recommended'] = $this->selectRecommendedPlan($plans);
         }
 
         return array_merge($summary, [
+            'partial' => $pathResult['status'] === 'partial',
             'why' => $why,
             'midpoints' => $this->suggestMidpoints($pathResult['path']),
             'rules' => $rules,
@@ -255,8 +268,20 @@ final class RouteService
 
     private function computeFastestPath(int $startId, int $endId): array
     {
-        $dijkstra = new Dijkstra();
-        $result = $dijkstra->shortestPath($this->graph, $startId, $endId, static fn () => 1.0);
+        $astar = new AStar();
+        $corridor = $this->buildCorridorSet($startId, $endId);
+        $heuristic = function (int $node) use ($endId): float {
+            return JumpMath::distanceLy($this->systems[$node], $this->systems[$endId]);
+        };
+        $result = $astar->shortestPath(
+            $this->gateNeighbors,
+            $startId,
+            $endId,
+            static fn () => 1.0,
+            $heuristic,
+            null,
+            $corridor
+        );
         return $result['path'] ?? [];
     }
 
@@ -341,13 +366,34 @@ final class RouteService
         array $avoidSet
     ): array {
         if ($startId === $endId) {
-            return [$startId];
+            return [
+                'path' => [$startId],
+                'status' => 'success',
+                'nodes_explored' => 0,
+                'duration_ms' => 0.0,
+            ];
         }
 
-        $dijkstra = new Dijkstra();
+        $astar = new AStar();
+        $corridor = $this->buildCorridorSet($startId, $endId);
         $costFn = $this->buildGateCostFn($options, $weights, $avoidLow, $avoidNull, $avoidSet);
-        $result = $dijkstra->shortestPath($this->graph, $startId, $endId, $costFn);
-        return $result['path'] ?? [];
+        $heuristic = function (int $node) use ($endId): float {
+            return JumpMath::distanceLy($this->systems[$node], $this->systems[$endId]);
+        };
+        $allowFn = function (int $node) use ($options, $avoidLow, $avoidNull, $avoidSet): bool {
+            $system = $this->systems[$node] ?? null;
+            return $system !== null && $this->isGateSystemAllowed($system, $options, $avoidLow, $avoidNull, $avoidSet);
+        };
+
+        return $astar->shortestPath(
+            $this->gateNeighbors,
+            $startId,
+            $endId,
+            $costFn,
+            $heuristic,
+            $allowFn,
+            $corridor
+        );
     }
 
     private function findGateCandidates(
@@ -434,9 +480,8 @@ final class RouteService
         $avoidSet = array_fill_keys($avoidSystems, true);
 
         $maxLaunch = \Everoute\Config\Env::int('HYBRID_LAUNCH_MAX_GATES', 6);
-        $maxLanding = \Everoute\Config\Env::int('HYBRID_LANDING_MAX_GATES', 3);
-
         $launchCandidates = $this->findGateCandidates($startId, $maxLaunch, $options, $avoidLow, $avoidNull, $avoidSet);
+        $launchCandidates[$startId] = ['hops' => 0, 'used_regional_gate' => false];
         if ($launchCandidates === []) {
             return [
                 'feasible' => false,
@@ -448,21 +493,18 @@ final class RouteService
             ];
         }
 
-        $landingCandidates = $this->findGateCandidates($endId, $maxLanding, $options, $avoidLow, $avoidNull, $avoidSet, true);
-        $landingCandidates[$endId] = ['hops' => 0, 'used_regional_gate' => false];
-
-        $start = $this->systems[$startId];
         $end = $this->systems[$endId];
         $best = null;
         $topCandidates = [];
+        $candidatesEvaluated = 0;
 
         foreach ($launchCandidates as $launchId => $launchMeta) {
             $gatePathToLaunch = $this->computeGatePath($startId, $launchId, $options, $weights, $avoidLow, $avoidNull, $avoidSet);
-            if ($gatePathToLaunch === []) {
+            if ($gatePathToLaunch['path'] === []) {
                 continue;
             }
-            $gateSummary = $this->summarizeRoute($gatePathToLaunch, $options);
-            $launchRegional = $this->pathHasRegionalGate($gatePathToLaunch);
+            $gateSummary = $this->summarizeRoute($gatePathToLaunch['path'], $options);
+            $launchRegional = $this->pathHasRegionalGate($gatePathToLaunch['path']);
             $launchSystem = $this->systems[$launchId] ?? null;
             if ($launchSystem === null) {
                 continue;
@@ -473,118 +515,81 @@ final class RouteService
             $hasNpc = !empty($launchSystem['has_npc_station']);
             $candidateScore = ($distanceLy * 10) + ($riskScore * 2) + ($hasNpc ? -8 : 6) + ($launchRegional ? -15 : 0);
 
-            $landingBest = null;
-            foreach ($landingCandidates as $landingId => $landingMeta) {
-                $landingSystem = $this->systems[$landingId] ?? null;
-                if ($landingSystem === null) {
-                    continue;
-                }
-                $gatePathFromLanding = $this->computeGatePath($landingId, $endId, $options, $weights, $avoidLow, $avoidNull, $avoidSet);
-                if ($landingId !== $endId && $gatePathFromLanding === []) {
-                    continue;
-                }
-
-                $gatePathForJump = $this->computeGatePath($launchId, $landingId, $options, $weights, $avoidLow, $avoidNull, $avoidSet);
-                $npcStationIds = $this->npcStationIdsFromPath($gatePathForJump);
-                $jumpPlan = $this->jumpPlanner->plan(
-                    $launchId,
-                    $landingId,
-                    $this->systems,
-                    $this->risk,
-                    $options,
-                    $npcStationIds,
-                    $gatePathForJump
-                );
-                if (empty($jumpPlan['feasible'])) {
-                    continue;
-                }
-
-                $landingSummary = $landingId === $endId ? [
-                    'systems' => [$end],
-                    'total_jumps' => 0,
-                    'total_gates' => 0,
-                    'risk_score' => 0,
-                    'exposure_score' => 0,
-                    'travel_time_proxy' => 0,
-                ] : $this->summarizeRoute($gatePathFromLanding, $options);
-
-                $jumpTravel = (float) ($jumpPlan['jump_travel_time_s'] ?? $jumpPlan['estimated_time_s'] ?? 0.0);
-                $cooldownMinutes = (float) ($jumpPlan['jump_cooldown_total_minutes'] ?? 0.0);
-                $totalTime = $gateSummary['travel_time_proxy']
-                    + $landingSummary['travel_time_proxy']
-                    + $jumpTravel
-                    + ($cooldownMinutes * 60);
-
-                $riskScores = array_filter([
-                    $gateSummary['risk_score'] ?? null,
-                    $jumpPlan['risk_score'] ?? null,
-                    $landingSummary['risk_score'] ?? null,
-                ], static fn ($value) => $value !== null);
-                $totalRisk = $riskScores !== []
-                    ? round(array_sum($riskScores) / count($riskScores), 2)
-                    : 0.0;
-                $totalExposure = round(
-                    ($gateSummary['exposure_score'] ?? 0)
-                    + ($jumpPlan['exposure_score'] ?? 0)
-                    + ($landingSummary['exposure_score'] ?? 0),
-                    2
-                );
-
-                $selectionScore = $totalTime + ($totalRisk * 8) + ($totalExposure * 2) + ($launchRegional ? -120 : 0);
-
-                $payload = [
-                    'feasible' => true,
-                    'total_time_s' => round($totalTime, 1),
-                    'total_risk_score' => $totalRisk,
-                    'total_exposure_score' => $totalExposure,
-                    'launch_system' => [
-                        'id' => $launchId,
-                        'name' => $launchSystem['name'],
-                        'gate_hops' => $gateSummary['total_gates'],
-                        'used_regional_gate' => $launchRegional,
-                        'npc_station' => $hasNpc,
-                    ],
-                    'landing_system' => [
-                        'id' => $landingId,
-                        'name' => $landingSystem['name'],
-                        'gate_hops_to_destination' => $landingSummary['total_gates'],
-                        'npc_station' => !empty($landingSystem['has_npc_station']),
-                    ],
-                    'gate_segment' => [
-                        'systems' => array_map(fn ($id) => $this->systems[$id]['name'], $gatePathToLaunch),
-                        'estimated_time_s' => $gateSummary['travel_time_proxy'],
-                        'risk_score' => $gateSummary['risk_score'],
-                        'exposure_score' => $gateSummary['exposure_score'],
-                        'total_gates' => $gateSummary['total_gates'],
-                    ],
-                    'jump_segment' => [
-                        'jump_hops_count' => $jumpPlan['jump_hops_count'] ?? $jumpPlan['total_jumps'] ?? 0,
-                        'jump_total_ly' => $jumpPlan['jump_total_ly'] ?? null,
-                        'jump_segments' => $jumpPlan['jump_segments'] ?? $jumpPlan['segments'] ?? [],
-                        'jump_cooldown_total_minutes' => $jumpPlan['jump_cooldown_total_minutes'] ?? null,
-                        'jump_fatigue_estimate_minutes' => $jumpPlan['jump_fatigue_estimate_minutes'] ?? null,
-                        'jump_fatigue_risk_label' => $jumpPlan['jump_fatigue_risk_label'] ?? null,
-                    ],
-                    'landing_gate_segment' => $landingSummary['total_gates'] > 0 ? [
-                        'systems' => array_map(fn ($id) => $this->systems[$id]['name'], $gatePathFromLanding),
-                        'estimated_time_s' => $landingSummary['travel_time_proxy'],
-                        'risk_score' => $landingSummary['risk_score'],
-                        'exposure_score' => $landingSummary['exposure_score'],
-                        'total_gates' => $landingSummary['total_gates'],
-                    ] : null,
-                    'score' => round($selectionScore, 2),
-                ];
-
-                if ($landingBest === null || $selectionScore < $landingBest['score']) {
-                    $landingBest = $payload;
-                }
-            }
-
-            if ($landingBest === null) {
+            $npcStationIds = $this->npcStationIdsFromPath($gatePathToLaunch['path']);
+            $candidatesEvaluated++;
+            $jumpPlan = $this->jumpPlanner->plan(
+                $launchId,
+                $endId,
+                $this->systems,
+                $this->risk,
+                $options,
+                $npcStationIds,
+                $gatePathToLaunch['path']
+            );
+            if (empty($jumpPlan['feasible'])) {
                 continue;
             }
 
-            $landingBest['launch_score'] = round($candidateScore, 2);
+            $jumpTravel = (float) ($jumpPlan['jump_travel_time_s'] ?? $jumpPlan['estimated_time_s'] ?? 0.0);
+            $cooldownMinutes = (float) ($jumpPlan['jump_cooldown_total_minutes'] ?? 0.0);
+            $totalTime = $gateSummary['travel_time_proxy']
+                + $jumpTravel
+                + ($cooldownMinutes * 60);
+
+            $riskScores = array_filter([
+                $gateSummary['risk_score'] ?? null,
+                $jumpPlan['risk_score'] ?? null,
+            ], static fn ($value) => $value !== null);
+            $totalRisk = $riskScores !== []
+                ? round(array_sum($riskScores) / count($riskScores), 2)
+                : 0.0;
+            $totalExposure = round(
+                ($gateSummary['exposure_score'] ?? 0)
+                + ($jumpPlan['exposure_score'] ?? 0),
+                2
+            );
+
+            $selectionScore = $totalTime + ($totalRisk * 8) + ($totalExposure * 2) + ($launchRegional ? -120 : 0);
+
+            $payload = [
+                'feasible' => true,
+                'total_time_s' => round($totalTime, 1),
+                'total_risk_score' => $totalRisk,
+                'total_exposure_score' => $totalExposure,
+                'launch_system' => [
+                    'id' => $launchId,
+                    'name' => $launchSystem['name'],
+                    'gate_hops' => $gateSummary['total_gates'],
+                    'used_regional_gate' => $launchRegional,
+                    'npc_station' => $hasNpc,
+                ],
+                'landing_system' => [
+                    'id' => $endId,
+                    'name' => $end['name'],
+                    'gate_hops_to_destination' => 0,
+                    'npc_station' => !empty($end['has_npc_station']),
+                ],
+                'gate_segment' => [
+                    'systems' => array_map(fn ($id) => $this->systems[$id]['name'], $gatePathToLaunch['path']),
+                    'estimated_time_s' => $gateSummary['travel_time_proxy'],
+                    'risk_score' => $gateSummary['risk_score'],
+                    'exposure_score' => $gateSummary['exposure_score'],
+                    'total_gates' => $gateSummary['total_gates'],
+                ],
+                'jump_segment' => [
+                    'jump_hops_count' => $jumpPlan['jump_hops_count'] ?? $jumpPlan['total_jumps'] ?? 0,
+                    'jump_total_ly' => $jumpPlan['jump_total_ly'] ?? null,
+                    'jump_segments' => $jumpPlan['jump_segments'] ?? $jumpPlan['segments'] ?? [],
+                    'jump_cooldown_total_minutes' => $jumpPlan['jump_cooldown_total_minutes'] ?? null,
+                    'jump_fatigue_estimate_minutes' => $jumpPlan['jump_fatigue_estimate_minutes'] ?? null,
+                    'jump_fatigue_risk_label' => $jumpPlan['jump_fatigue_risk_label'] ?? null,
+                ],
+                'landing_gate_segment' => null,
+                'score' => round($selectionScore, 2),
+                'candidates_evaluated' => $candidatesEvaluated,
+            ];
+
+            $payload['launch_score'] = round($candidateScore, 2);
             $topCandidates[] = [
                 'id' => $launchId,
                 'name' => $launchSystem['name'],
@@ -595,8 +600,8 @@ final class RouteService
                 'score' => round($candidateScore, 2),
             ];
 
-            if ($best === null || $landingBest['score'] < $best['score']) {
-                $best = $landingBest;
+            if ($best === null || $payload['score'] < $best['score']) {
+                $best = $payload;
             }
         }
 
@@ -604,10 +609,11 @@ final class RouteService
             return [
                 'feasible' => false,
                 'reason' => $avoidLow || $avoidNull
-                    ? 'Hybrid planning could not find a launch/landing jump chain. Avoid low/null-sec settings may be too restrictive for capital repositioning.'
-                    : 'No hybrid plan could find a valid launch and landing chain.',
+                    ? 'Hybrid planning could not find a launch chain. Avoid low/null-sec settings may be too restrictive for capital repositioning.'
+                    : 'No hybrid plan could find a valid launch chain.',
                 'gate_segment' => [],
                 'jump_segment' => [],
+                'candidates_evaluated' => $candidatesEvaluated,
             ];
         }
 
@@ -615,6 +621,7 @@ final class RouteService
         $best['candidate_launches'] = array_slice($topCandidates, 0, 3);
         $best['reasons'] = $this->hybridReasons($best, $jumpOnlyPlan);
         $best['jump_only_infeasible'] = empty($jumpOnlyPlan['feasible']);
+        $best['candidates_evaluated'] = $candidatesEvaluated;
 
         return $best;
     }
@@ -705,10 +712,39 @@ final class RouteService
         $this->chokepoints = array_fill_keys(self::$chokepointsCache, true);
 
         $this->graph = GraphStore::graph();
+        $this->gateNeighbors = GraphStore::gateNeighbors();
         $this->adjacency = GraphStore::adjacency();
         $this->reverseAdjacency = GraphStore::reverseAdjacency();
 
+        $this->jumpPlanner->preloadJumpGraphs($this->systems);
+
         $this->logger->info('Route data loaded', ['systems' => count($this->systems), 'risk' => count($this->risk)]);
+    }
+
+    /** @return array<int, bool> */
+    private function buildCorridorSet(int $startId, int $endId): array
+    {
+        $start = $this->systems[$startId] ?? null;
+        $end = $this->systems[$endId] ?? null;
+        if ($start === null || $end === null) {
+            return [];
+        }
+
+        $direct = JumpMath::distanceLy($start, $end);
+        $limit = $direct * 3.0;
+        $allowed = [];
+
+        foreach ($this->systems as $id => $system) {
+            $distance = JumpMath::distanceLy($start, $system) + JumpMath::distanceLy($system, $end);
+            if ($distance < $limit) {
+                $allowed[$id] = true;
+            }
+        }
+
+        $allowed[$startId] = true;
+        $allowed[$endId] = true;
+
+        return $allowed;
     }
 
     private function routeCacheKey(int $startId, int $endId, array $options): string

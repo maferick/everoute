@@ -11,6 +11,11 @@ final class JumpPlanner
 {
     private const BASE_JUMP_TIME_S = 60;
     private const DOCK_OVERHEAD_S = 90;
+    private bool $jumpNeighborsLoaded = false;
+    /** @var array<float, array<int, array<int, float>>> */
+    private array $jumpNeighbors = [];
+    /** @var float[] */
+    private array $jumpRangeBuckets = [];
 
     public function __construct(
         private JumpRangeCalculator $rangeCalculator,
@@ -19,6 +24,30 @@ final class JumpPlanner
         private JumpFatigueModel $fatigueModel,
         private Logger $logger
     ) {
+    }
+
+    public function preloadJumpGraphs(array $systems): void
+    {
+        if ($this->jumpNeighborsLoaded) {
+            return;
+        }
+
+        $this->jumpRangeBuckets = $this->rangeCalculator->rangeBuckets();
+        foreach ($this->jumpRangeBuckets as $rangeLy) {
+            $rangeMeters = $rangeLy * JumpMath::METERS_PER_LY;
+            $bucketIndex = $this->buildSpatialBuckets($systems, $rangeMeters);
+            $neighbors = [];
+            foreach ($systems as $id => $system) {
+                $neighbors[$id] = $this->buildJumpNeighborsForSystem($system, $systems, $bucketIndex, $rangeMeters);
+            }
+            $this->jumpNeighbors[$rangeLy] = $neighbors;
+        }
+
+        $this->jumpNeighborsLoaded = true;
+        $this->logger->info('Jump neighbor graph loaded', [
+            'range_buckets' => count($this->jumpRangeBuckets),
+            'systems' => count($systems),
+        ]);
     }
 
     public function plan(
@@ -83,6 +112,19 @@ final class JumpPlanner
             ];
         }
 
+        $this->preloadJumpGraphs($systems);
+        $rangeBucket = $this->resolveRangeBucket($effectiveRange);
+        if ($rangeBucket === null || !isset($this->jumpNeighbors[$rangeBucket])) {
+            return [
+                'feasible' => false,
+                'error' => 'jump-assisted plan not feasible for current ship/skills',
+                'reason' => 'Missing precomputed jump range data.',
+                'effective_jump_range_ly' => $effectiveRange,
+                'jump_cooldown_total_minutes' => null,
+                'jump_fatigue_risk_label' => 'not_applicable',
+            ];
+        }
+
         $rangeMeters = $effectiveRange * JumpMath::METERS_PER_LY;
         $avoidFlags = $this->buildAvoidFlags($options);
         $debugEnabled = Env::bool('APP_DEBUG', false);
@@ -96,7 +138,8 @@ final class JumpPlanner
             $options,
             $jumpHighSecRestricted,
             $rangeMeters,
-            $avoidFlags
+            $avoidFlags,
+            $this->jumpNeighbors[$rangeBucket]
         );
         if (!empty($planResult['error'])) {
             if ($debugEnabled && $plannerDebug !== []) {
@@ -182,27 +225,26 @@ final class JumpPlanner
         array $options,
         bool $jumpHighSecRestricted,
         float $rangeMeters,
-        array $avoidFlags
+        array $avoidFlags,
+        array $neighborsBySystem
     ): array {
         if ($startId === $endId) {
             return ['segments' => [], 'midpoints' => [], 'debug' => []];
         }
 
-        $bucketIndex = $this->buildBucketIndex($systems, $rangeMeters);
-        $startNeighbors = $this->reachableNeighbors($startId, $systems, $bucketIndex, $rangeMeters, $options, $jumpHighSecRestricted);
-        if ($startNeighbors === []) {
+        $npcStationSet = $npcStationIds === [] ? [] : array_fill_keys($npcStationIds, true);
+        if (($neighborsBySystem[$startId] ?? []) === []) {
             return [
                 'error' => $this->buildInfeasibleReason('No candidates within range from start.', $avoidFlags, $jumpHighSecRestricted),
                 'debug' => [
-                    'candidate_systems_evaluated' => $bucketIndex['evaluated'],
-                    'edges_built' => $bucketIndex['edges'],
-                    'max_segment_distance_ly' => $bucketIndex['max_distance_ly'],
+                    'candidate_systems_evaluated' => 0,
+                    'edges_built' => 0,
+                    'max_segment_distance_ly' => 0.0,
                     'chain_length' => 0,
                 ],
             ];
         }
-
-        $npcStationSet = $npcStationIds === [] ? [] : array_fill_keys($npcStationIds, true);
+        $corridor = $this->buildCorridorSet($startId, $endId, $systems);
         $pathResult = $this->shortestJumpPath(
             $startId,
             $endId,
@@ -212,15 +254,22 @@ final class JumpPlanner
             $options,
             $jumpHighSecRestricted,
             $rangeMeters,
-            $bucketIndex
+            $neighborsBySystem,
+            $corridor
         );
+        $this->logger->info('Route search metrics', [
+            'type' => 'jump',
+            'nodes_explored' => $pathResult['nodes_explored'],
+            'duration_ms' => round($pathResult['duration_ms'], 2),
+            'status' => $pathResult['status'],
+        ]);
         if ($pathResult['path'] === []) {
             return [
                 'error' => $this->buildInfeasibleReason('No valid midpoint chain within jump range.', $avoidFlags, $jumpHighSecRestricted),
                 'debug' => [
-                    'candidate_systems_evaluated' => $bucketIndex['evaluated'],
-                    'edges_built' => $bucketIndex['edges'],
-                    'max_segment_distance_ly' => $bucketIndex['max_distance_ly'],
+                    'candidate_systems_evaluated' => 0,
+                    'edges_built' => 0,
+                    'max_segment_distance_ly' => 0.0,
                     'chain_length' => 0,
                 ],
             ];
@@ -241,9 +290,9 @@ final class JumpPlanner
             'segments' => $segments,
             'midpoints' => $midpoints,
             'debug' => [
-                'candidate_systems_evaluated' => $bucketIndex['evaluated'],
-                'edges_built' => $bucketIndex['edges'],
-                'max_segment_distance_ly' => $bucketIndex['max_distance_ly'],
+                'candidate_systems_evaluated' => 0,
+                'edges_built' => 0,
+                'max_segment_distance_ly' => 0.0,
                 'chain_length' => count($segments),
             ],
         ];
@@ -258,48 +307,35 @@ final class JumpPlanner
         array $options,
         bool $jumpHighSecRestricted,
         float $rangeMeters,
-        array $bucketIndex
+        array $neighborsBySystem,
+        array $corridor
     ): array {
-        $gScore = [$startId => 0.0];
-        $fScore = [$startId => $this->heuristic($systems[$startId], $systems[$endId])];
-        $queue = new \SplPriorityQueue();
-        $queue->setExtractFlags(\SplPriorityQueue::EXTR_DATA);
-        $queue->insert($startId, -$fScore[$startId]);
-        $cameFrom = [];
+        $astar = new AStar();
+        $heuristic = function (int $node) use ($systems, $endId): float {
+            return $this->heuristic($systems[$node], $systems[$endId]);
+        };
+        $allowFn = function (int $node) use ($systems, $options, $jumpHighSecRestricted): bool {
+            $system = $systems[$node] ?? null;
+            return $system !== null && $this->checkJumpSystemAllowed($system, $options, $jumpHighSecRestricted)['allowed'];
+        };
+        $costFn = function (int $from, int $to, mixed $edgeData) use ($rangeMeters, $risk, $systems, $npcStationIds, $options): float {
+            $distanceLy = (float) ($edgeData ?? 0.0);
+            $tentative = 1.0 + ($distanceLy / max(0.1, $rangeMeters / JumpMath::METERS_PER_LY));
+            $riskScore = ($risk[$to]['kills_last_24h'] ?? 0) + ($risk[$to]['pod_kills_last_24h'] ?? 0);
+            $npcBonus = $this->npcBonus($systems[$to], $npcStationIds, $options);
+            $avoidPenalty = $this->avoidPenalty($systems[$to], $options);
+            return $tentative + ($riskScore * 0.05) - $npcBonus + $avoidPenalty;
+        };
 
-        while (!$queue->isEmpty()) {
-            $current = $queue->extract();
-            if ($current === $endId) {
-                return ['path' => $this->reconstructPath($cameFrom, $current)];
-            }
-
-            foreach ($this->reachableNeighbors($current, $systems, $bucketIndex, $rangeMeters, $options, $jumpHighSecRestricted) as $neighborId => $distanceLy) {
-                $tentative = $gScore[$current] + 1.0 + ($distanceLy / max(0.1, $rangeMeters / JumpMath::METERS_PER_LY));
-                $riskScore = ($risk[$neighborId]['kills_last_24h'] ?? 0) + ($risk[$neighborId]['pod_kills_last_24h'] ?? 0);
-                $npcBonus = $this->npcBonus($systems[$neighborId], $npcStationIds, $options);
-                $avoidPenalty = $this->avoidPenalty($systems[$neighborId], $options);
-                $tentative += ($riskScore * 0.05) - $npcBonus + $avoidPenalty;
-
-                if (!isset($gScore[$neighborId]) || $tentative < $gScore[$neighborId]) {
-                    $cameFrom[$neighborId] = $current;
-                    $gScore[$neighborId] = $tentative;
-                    $fScore[$neighborId] = $tentative + $this->heuristic($systems[$neighborId], $systems[$endId]);
-                    $queue->insert($neighborId, -$fScore[$neighborId]);
-                }
-            }
-        }
-
-        return ['path' => []];
-    }
-
-    private function reconstructPath(array $cameFrom, int $current): array
-    {
-        $path = [$current];
-        while (isset($cameFrom[$current])) {
-            $current = $cameFrom[$current];
-            array_unshift($path, $current);
-        }
-        return $path;
+        return $astar->shortestPath(
+            $neighborsBySystem,
+            $startId,
+            $endId,
+            $costFn,
+            $heuristic,
+            $allowFn,
+            $corridor
+        );
     }
 
     private function heuristic(array $from, array $to): float
@@ -333,7 +369,53 @@ final class JumpPlanner
         return $penalty;
     }
 
-    private function buildBucketIndex(array $systems, float $rangeMeters): array
+    private function resolveRangeBucket(float $effectiveRange): ?float
+    {
+        $rounded = round($effectiveRange, 2);
+        if (isset($this->jumpNeighbors[$rounded])) {
+            return $rounded;
+        }
+
+        $closest = null;
+        $closestDiff = null;
+        foreach ($this->jumpRangeBuckets as $bucket) {
+            $diff = abs($bucket - $rounded);
+            if ($closestDiff === null || $diff < $closestDiff) {
+                $closestDiff = $diff;
+                $closest = $bucket;
+            }
+        }
+
+        return $closest;
+    }
+
+    /** @return array<int, bool> */
+    private function buildCorridorSet(int $startId, int $endId, array $systems): array
+    {
+        $start = $systems[$startId] ?? null;
+        $end = $systems[$endId] ?? null;
+        if ($start === null || $end === null) {
+            return [];
+        }
+
+        $direct = JumpMath::distanceLy($start, $end);
+        $limit = $direct * 3.0;
+        $allowed = [];
+
+        foreach ($systems as $id => $system) {
+            $distance = JumpMath::distanceLy($start, $system) + JumpMath::distanceLy($system, $end);
+            if ($distance < $limit) {
+                $allowed[$id] = true;
+            }
+        }
+
+        $allowed[$startId] = true;
+        $allowed[$endId] = true;
+
+        return $allowed;
+    }
+
+    private function buildSpatialBuckets(array $systems, float $rangeMeters): array
     {
         $bucketSize = max(1.0, $rangeMeters);
         $buckets = [];
@@ -345,9 +427,6 @@ final class JumpPlanner
         return [
             'size' => $bucketSize,
             'buckets' => $buckets,
-            'evaluated' => 0,
-            'edges' => 0,
-            'max_distance_ly' => 0.0,
         ];
     }
 
@@ -359,51 +438,37 @@ final class JumpPlanner
         return $bx . ':' . $by . ':' . $bz;
     }
 
-    private function reachableNeighbors(
-        int $systemId,
-        array $systems,
-        array &$bucketIndex,
-        float $rangeMeters,
-        array $options,
-        bool $jumpHighSecRestricted
-    ): array {
-        $system = $systems[$systemId] ?? null;
-        if ($system === null) {
-            return [];
-        }
-
+    /** @return array<int, float> */
+    private function buildJumpNeighborsForSystem(array $system, array $systems, array $bucketIndex, float $rangeMeters): array
+    {
         $bucketSize = $bucketIndex['size'];
         $bx = (int) floor(((float) $system['x']) / $bucketSize);
         $by = (int) floor(((float) $system['y']) / $bucketSize);
         $bz = (int) floor(((float) $system['z']) / $bucketSize);
-
         $neighbors = [];
+
         for ($dx = -1; $dx <= 1; $dx++) {
             for ($dy = -1; $dy <= 1; $dy++) {
                 for ($dz = -1; $dz <= 1; $dz++) {
                     $key = ($bx + $dx) . ':' . ($by + $dy) . ':' . ($bz + $dz);
                     foreach ($bucketIndex['buckets'][$key] ?? [] as $candidateId) {
-                        if ($candidateId === $systemId) {
+                        if ($candidateId === (int) $system['id']) {
                             continue;
                         }
                         $candidate = $systems[$candidateId] ?? null;
                         if ($candidate === null) {
                             continue;
                         }
-                        $bucketIndex['evaluated']++;
-                        $allowed = $this->checkJumpSystemAllowed($candidate, $options, $jumpHighSecRestricted);
-                        if (!$allowed['allowed']) {
+                        if (
+                            abs(((float) $system['x']) - (float) $candidate['x']) > $rangeMeters
+                            || abs(((float) $system['y']) - (float) $candidate['y']) > $rangeMeters
+                            || abs(((float) $system['z']) - (float) $candidate['z']) > $rangeMeters
+                        ) {
                             continue;
                         }
                         $distanceMeters = JumpMath::distanceMeters($system, $candidate);
-                        $distanceLy = $distanceMeters / JumpMath::METERS_PER_LY;
                         if ($distanceMeters <= $rangeMeters) {
-                            $neighbors[$candidateId] = $distanceLy;
-                            $bucketIndex['edges']++;
-                        }
-
-                        if ($distanceLy > $bucketIndex['max_distance_ly']) {
-                            $bucketIndex['max_distance_ly'] = $distanceLy;
+                            $neighbors[$candidateId] = $distanceMeters / JumpMath::METERS_PER_LY;
                         }
                     }
                 }

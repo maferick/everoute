@@ -28,4 +28,19 @@ final class JumpRangeCalculator
 
         return round($effective, 2);
     }
+
+    /** @return float[] */
+    public function rangeBuckets(): array
+    {
+        $ranges = [];
+        $multiplier = (float) ($this->config['skill_multiplier_per_level'] ?? 0.0);
+        foreach ($this->config['base_ranges_ly'] ?? [] as $base) {
+            for ($skillLevel = 0; $skillLevel <= 5; $skillLevel++) {
+                $ranges[] = round(((float) $base) * (1.0 + $skillLevel * $multiplier), 2);
+            }
+        }
+        $ranges = array_values(array_unique($ranges, SORT_NUMERIC));
+        sort($ranges, SORT_NUMERIC);
+        return $ranges;
+    }
 }
