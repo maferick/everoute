@@ -54,50 +54,66 @@ final class RouteService
 
     public function computeRoutes(array $options): array
     {
-        $start = GraphStore::systemByNameOrId($options['from']);
-        $end = GraphStore::systemByNameOrId($options['to']);
+        try {
+            $start = GraphStore::systemByNameOrId($options['from']);
+            $end = GraphStore::systemByNameOrId($options['to']);
 
-        if ($start === null || $end === null) {
-            return ['error' => 'Unknown system'];
-        }
-
-        $cacheKey = $this->routeCacheKey((int) $start['id'], (int) $end['id'], $options);
-        if ($this->cache) {
-            $cached = $this->cache->getJson($cacheKey);
-            if (is_array($cached)) {
-                return $cached;
+            if ($start === null || $end === null) {
+                return ['error' => 'Unknown system'];
             }
+
+            $cacheKey = $this->routeCacheKey((int) $start['id'], (int) $end['id'], $options);
+            if ($this->cache) {
+                try {
+                    $cached = $this->cache->getJson($cacheKey);
+                    if (is_array($cached)) {
+                        return $cached;
+                    }
+                } catch (\Throwable $exception) {
+                    $this->logger->warning('Route cache lookup failed', [
+                        'error' => $exception->getMessage(),
+                    ]);
+                }
+            }
+
+            $validation = $this->rules->validateEndpoints($start, $end, $options);
+            if ($validation !== null) {
+                return $validation;
+            }
+
+            $profiles = [
+                'fast' => $this->profileWeights(0),
+                'balanced' => $this->profileWeights((int) ($options['safety_vs_speed'] ?? 50)),
+                'safe' => $this->profileWeights(100),
+            ];
+
+            $results = [];
+            foreach ($profiles as $key => $weights) {
+                $result = $this->computeRoute($start['id'], $end['id'], $options, $weights);
+                $results[$key] = $result;
+            }
+
+            $payload = [
+                'from' => $start,
+                'to' => $end,
+                'routes' => $results,
+                'risk_updated_at' => $this->riskRepo->getLatestUpdate(),
+            ];
+
+            if ($this->cache) {
+                try {
+                    $this->cache->setJson($cacheKey, $payload, $this->routeCacheTtlSeconds);
+                } catch (\Throwable $exception) {
+                    $this->logger->warning('Route cache write failed', [
+                        'error' => $exception->getMessage(),
+                    ]);
+                }
+            }
+
+            return $payload;
+        } finally {
+            $this->logger->flushMetrics();
         }
-
-        $validation = $this->rules->validateEndpoints($start, $end, $options);
-        if ($validation !== null) {
-            return $validation;
-        }
-
-        $profiles = [
-            'fast' => $this->profileWeights(0),
-            'balanced' => $this->profileWeights((int) ($options['safety_vs_speed'] ?? 50)),
-            'safe' => $this->profileWeights(100),
-        ];
-
-        $results = [];
-        foreach ($profiles as $key => $weights) {
-            $result = $this->computeRoute($start['id'], $end['id'], $options, $weights);
-            $results[$key] = $result;
-        }
-
-        $payload = [
-            'from' => $start,
-            'to' => $end,
-            'routes' => $results,
-            'risk_updated_at' => $this->riskRepo->getLatestUpdate(),
-        ];
-
-        if ($this->cache) {
-            $this->cache->setJson($cacheKey, $payload, $this->routeCacheTtlSeconds);
-        }
-
-        return $payload;
     }
 
     private function profileWeights(int $safety): array
@@ -121,8 +137,7 @@ final class RouteService
         $avoidSet = array_fill_keys($avoidSystems, true);
 
         $pathResult = $this->computeGatePath($startId, $endId, $options, $weights, $avoidLow, $avoidNull, $avoidSet);
-        $this->logger->info('Route search metrics', [
-            'type' => 'gate',
+        $this->logger->recordMetric('gate', [
             'nodes_explored' => $pathResult['nodes_explored'],
             'duration_ms' => round($pathResult['duration_ms'], 2),
             'status' => $pathResult['status'],
@@ -172,8 +187,7 @@ final class RouteService
                 $jumpPlan
             );
             $hybridDurationMs = (microtime(true) - $hybridStart) * 1000;
-            $this->logger->info('Route search metrics', [
-                'type' => 'hybrid',
+            $this->logger->recordMetric('hybrid', [
                 'nodes_explored' => $plans['hybrid']['candidates_evaluated'] ?? 0,
                 'duration_ms' => round($hybridDurationMs, 2),
                 'status' => !empty($plans['hybrid']['feasible']) ? 'success' : 'failed',
