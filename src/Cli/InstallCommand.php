@@ -97,7 +97,7 @@ final class InstallCommand extends Command
 
         $systemsCount = (int) $pdo->query('SELECT COUNT(*) FROM systems')->fetchColumn();
         if ($systemsCount === 0) {
-            $output->writeln('<comment>Universe data not present (systems=0). Skipping chokepoint seed. Run: php bin/console import:universe --file data/universe.json then php bin/console seed:chokepoints</comment>');
+            $output->writeln('<comment>Universe data not present (systems=0). Skipping chokepoint seed. Run: php bin/console sde:install then php bin/console seed:chokepoints (legacy: import:universe --file data/universe.json)</comment>');
         } else {
             $seeder = new ChokepointSeeder();
             $result = $seeder->seed($pdo, dirname(__DIR__, 2) . '/data/chokepoints.json');
@@ -107,7 +107,7 @@ final class InstallCommand extends Command
             }
         }
 
-        $output->writeln('<comment>Next steps: import universe before seeding chokepoints/risk if not already done.</comment>');
+        $output->writeln('<comment>Next steps: run php bin/console sde:install to import the universe (preferred), then seed chokepoints and risk.</comment>');
 
         if ($input->getOption('write-env')) {
             $env = file_get_contents(dirname(__DIR__, 2) . '/.env.example');

@@ -21,7 +21,7 @@ final class ImportUniverseCommand extends Command
     {
         $this
             ->setName(self::$defaultName)
-            ->setDescription('Import universe data from JSON or CSV')
+            ->setDescription('Legacy import: universe data from JSON (use sde:install for CCP SDE)')
             ->addOption('file', null, InputOption::VALUE_REQUIRED, 'Path to data file')
             ->addOption('format', null, InputOption::VALUE_REQUIRED, 'json|csv', 'json');
     }
@@ -59,7 +59,8 @@ final class ImportUniverseCommand extends Command
 
     private function importSystems(PDO $pdo, array $systems): void
     {
-        $stmt = $pdo->prepare('INSERT INTO systems (id, name, security, region_id, constellation_id, x, y, z, system_size_au) VALUES (:id, :name, :security, :region_id, :constellation_id, :x, :y, :z, :system_size_au) ON DUPLICATE KEY UPDATE name=VALUES(name), security=VALUES(security), region_id=VALUES(region_id), constellation_id=VALUES(constellation_id), x=VALUES(x), y=VALUES(y), z=VALUES(z), system_size_au=VALUES(system_size_au)');
+        $now = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        $stmt = $pdo->prepare('INSERT INTO systems (id, name, security, region_id, constellation_id, x, y, z, system_size_au, updated_at) VALUES (:id, :name, :security, :region_id, :constellation_id, :x, :y, :z, :system_size_au, :updated_at) ON DUPLICATE KEY UPDATE name=VALUES(name), security=VALUES(security), region_id=VALUES(region_id), constellation_id=VALUES(constellation_id), x=VALUES(x), y=VALUES(y), z=VALUES(z), system_size_au=VALUES(system_size_au), updated_at=VALUES(updated_at)');
         foreach ($systems as $system) {
             $stmt->execute([
                 'id' => $system['id'],
@@ -71,6 +72,7 @@ final class ImportUniverseCommand extends Command
                 'y' => $system['y'] ?? 0,
                 'z' => $system['z'] ?? 0,
                 'system_size_au' => $system['system_size_au'] ?? 1.0,
+                'updated_at' => $now,
             ]);
         }
     }
@@ -78,18 +80,28 @@ final class ImportUniverseCommand extends Command
     private function importStargates(PDO $pdo, array $stargates): void
     {
         $pdo->exec('DELETE FROM stargates');
-        $stmt = $pdo->prepare('INSERT INTO stargates (from_system_id, to_system_id) VALUES (:from_id, :to_id)');
+        $now = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        $stmtWithId = $pdo->prepare('INSERT INTO stargates (id, from_system_id, to_system_id, updated_at) VALUES (:id, :from_id, :to_id, :updated_at)');
+        $stmt = $pdo->prepare('INSERT INTO stargates (from_system_id, to_system_id, updated_at) VALUES (:from_id, :to_id, :updated_at)');
         foreach ($stargates as $edge) {
-            $stmt->execute([
+            $payload = [
                 'from_id' => $edge['from_system_id'],
                 'to_id' => $edge['to_system_id'],
-            ]);
+                'updated_at' => $now,
+            ];
+            if (isset($edge['id'])) {
+                $payload['id'] = $edge['id'];
+                $stmtWithId->execute($payload);
+            } else {
+                $stmt->execute($payload);
+            }
         }
     }
 
     private function importStations(PDO $pdo, array $stations): void
     {
-        $stmt = $pdo->prepare('INSERT INTO stations (station_id, system_id, name, type, is_npc) VALUES (:station_id, :system_id, :name, :type, :is_npc) ON DUPLICATE KEY UPDATE name=VALUES(name), type=VALUES(type), is_npc=VALUES(is_npc)');
+        $now = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        $stmt = $pdo->prepare('INSERT INTO stations (station_id, system_id, name, type, is_npc, updated_at) VALUES (:station_id, :system_id, :name, :type, :is_npc, :updated_at) ON DUPLICATE KEY UPDATE name=VALUES(name), type=VALUES(type), is_npc=VALUES(is_npc), updated_at=VALUES(updated_at)');
         foreach ($stations as $station) {
             $stmt->execute([
                 'station_id' => $station['station_id'],
@@ -97,6 +109,7 @@ final class ImportUniverseCommand extends Command
                 'name' => $station['name'],
                 'type' => $station['type'] ?? 'npc',
                 'is_npc' => $station['is_npc'] ?? 1,
+                'updated_at' => $now,
             ]);
         }
     }

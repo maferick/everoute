@@ -2,6 +2,7 @@ DROP TABLE IF EXISTS risk_import_jobs;
 DROP TABLE IF EXISTS route_cache;
 DROP TABLE IF EXISTS chokepoints;
 DROP TABLE IF EXISTS system_risk;
+DROP TABLE IF EXISTS sde_meta;
 DROP TABLE IF EXISTS stations;
 DROP TABLE IF EXISTS stargates;
 DROP TABLE IF EXISTS systems;
