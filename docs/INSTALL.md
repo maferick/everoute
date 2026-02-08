@@ -10,6 +10,9 @@
 composer install --no-dev
 cp .env.example .env
 php bin/console install --admin-user root --admin-pass <password>
+php bin/console import:universe --file data/universe.json
+php bin/console seed:chokepoints
+php bin/console import:risk --file data/risk.json
 ```
 
 ## Schema-only (existing DB/user)
@@ -23,6 +26,11 @@ See `scripts/nginx-example.conf`.
 ## Import Universe Data
 ```bash
 php bin/console import:universe --file data/universe.json
+```
+
+## Seed Chokepoints
+```bash
+php bin/console seed:chokepoints
 ```
 
 ## Import Risk Data

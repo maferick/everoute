@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Jita",
+    "reason": "Jita trade hub",
+    "category": "trade"
+  },
+  {
+    "name": "Amarr",
+    "reason": "Amarr trade hub",
+    "category": "trade"
+  },
+  {
+    "name": "Dodixie",
+    "reason": "Dodixie trade hub",
+    "category": "trade"
+  },
+  {
+    "name": "Rens",
+    "reason": "Rens trade hub",
+    "category": "trade"
+  }
+]
