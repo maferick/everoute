@@ -47,6 +47,7 @@ final class ImportUniverseCommand extends Command
             $this->importSystems($pdo, $payload['systems'] ?? []);
             $this->importStargates($pdo, $payload['stargates'] ?? []);
             $this->importStations($pdo, $payload['stations'] ?? []);
+            $this->updateRegionalGates($pdo);
         } else {
             $output->writeln('<error>CSV format not yet supported; use JSON.</error>');
             return Command::FAILURE;
@@ -81,14 +82,24 @@ final class ImportUniverseCommand extends Command
     {
         $pdo->exec('DELETE FROM stargates');
         $now = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-        $stmtWithId = $pdo->prepare('INSERT INTO stargates (id, from_system_id, to_system_id, updated_at) VALUES (:id, :from_id, :to_id, :updated_at)');
-        $stmt = $pdo->prepare('INSERT INTO stargates (from_system_id, to_system_id, updated_at) VALUES (:from_id, :to_id, :updated_at)');
+        $hasRegional = $this->tableHasColumn($pdo, 'stargates', 'is_regional_gate');
+        $stmtWithId = $pdo->prepare($hasRegional
+            ? 'INSERT INTO stargates (id, from_system_id, to_system_id, is_regional_gate, updated_at) VALUES (:id, :from_id, :to_id, :is_regional_gate, :updated_at)'
+            : 'INSERT INTO stargates (id, from_system_id, to_system_id, updated_at) VALUES (:id, :from_id, :to_id, :updated_at)'
+        );
+        $stmt = $pdo->prepare($hasRegional
+            ? 'INSERT INTO stargates (from_system_id, to_system_id, is_regional_gate, updated_at) VALUES (:from_id, :to_id, :is_regional_gate, :updated_at)'
+            : 'INSERT INTO stargates (from_system_id, to_system_id, updated_at) VALUES (:from_id, :to_id, :updated_at)'
+        );
         foreach ($stargates as $edge) {
             $payload = [
                 'from_id' => $edge['from_system_id'],
                 'to_id' => $edge['to_system_id'],
                 'updated_at' => $now,
             ];
+            if ($hasRegional) {
+                $payload['is_regional_gate'] = (int) ($edge['is_regional_gate'] ?? 0);
+            }
             if (isset($edge['id'])) {
                 $payload['id'] = $edge['id'];
                 $stmtWithId->execute($payload);
@@ -112,5 +123,32 @@ final class ImportUniverseCommand extends Command
                 'updated_at' => $now,
             ]);
         }
+    }
+
+    private function updateRegionalGates(PDO $pdo): void
+    {
+        if (!$this->tableHasColumn($pdo, 'stargates', 'is_regional_gate')) {
+            return;
+        }
+
+        $pdo->exec(
+            'UPDATE stargates s
+            JOIN systems a ON s.from_system_id = a.id
+            JOIN systems b ON s.to_system_id = b.id
+            SET s.is_regional_gate = CASE
+                WHEN a.region_id IS NOT NULL AND b.region_id IS NOT NULL AND a.region_id <> b.region_id THEN 1
+                ELSE 0
+            END'
+        );
+    }
+
+    private function tableHasColumn(PDO $pdo, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare(
+            'SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = :table AND column_name = :column'
+        );
+        $stmt->execute(['table' => $table, 'column' => $column]);
+
+        return (bool) $stmt->fetchColumn();
     }
 }

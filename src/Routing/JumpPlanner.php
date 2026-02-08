@@ -9,16 +9,12 @@ final class JumpPlanner
     private const METERS_PER_LY = 9.4607e15;
     private const BASE_JUMP_TIME_S = 60;
     private const DOCK_OVERHEAD_S = 90;
-    private const MAX_FATIGUE_H = 5.0;
-    private const MAX_COOLDOWN_MIN = 30.0;
-    private const FATIGUE_PER_JUMP_H = 0.5;
-    private const COOLDOWN_BASE_MIN = 2.0;
-    private const COOLDOWN_PER_FATIGUE_MIN = 5.0;
 
     public function __construct(
         private JumpRangeCalculator $rangeCalculator,
         private WeightCalculator $calculator,
-        private MovementRules $rules
+        private MovementRules $rules,
+        private JumpFatigueModel $fatigueModel
     ) {
     }
 
@@ -41,6 +37,8 @@ final class JumpPlanner
                 'error' => 'jump-assisted plan not feasible for current ship/skills',
                 'reason' => 'Unknown jump ship type for range calculation.',
                 'effective_jump_range_ly' => null,
+                'jump_cooldown_total_minutes' => null,
+                'jump_fatigue_risk_label' => 'not_applicable',
             ];
         }
 
@@ -52,16 +50,33 @@ final class JumpPlanner
                 'error' => 'jump-assisted plan not feasible for current ship/skills',
                 'reason' => 'Missing system data for jump planning.',
                 'effective_jump_range_ly' => $effectiveRange,
+                'jump_cooldown_total_minutes' => null,
+                'jump_fatigue_risk_label' => 'not_applicable',
             ];
         }
 
         $jumpHighSecRestricted = $this->rules->isCapitalRestricted($options) || $shipType === 'jump_freighter';
-        if ($jumpHighSecRestricted && ($this->rules->isHighSec($start) || $this->rules->isHighSec($end))) {
+        $startAllowed = $this->checkJumpSystemAllowed($start, $options, $jumpHighSecRestricted);
+        if (!$startAllowed['allowed']) {
             return [
                 'feasible' => false,
                 'error' => 'jump-assisted plan not feasible for current ship/skills',
-                'reason' => 'Capital ships cannot jump into or out of high-sec systems.',
+                'reason' => $startAllowed['reason'],
                 'effective_jump_range_ly' => $effectiveRange,
+                'jump_cooldown_total_minutes' => null,
+                'jump_fatigue_risk_label' => 'not_applicable',
+            ];
+        }
+
+        $endAllowed = $this->checkJumpSystemAllowed($end, $options, $jumpHighSecRestricted);
+        if (!$endAllowed['allowed']) {
+            return [
+                'feasible' => false,
+                'error' => 'jump-assisted plan not feasible for current ship/skills',
+                'reason' => $endAllowed['reason'],
+                'effective_jump_range_ly' => $effectiveRange,
+                'jump_cooldown_total_minutes' => null,
+                'jump_fatigue_risk_label' => 'not_applicable',
             ];
         }
 
@@ -92,6 +107,8 @@ final class JumpPlanner
                     'error' => 'jump-assisted plan not feasible for current ship/skills',
                     'reason' => 'No valid midpoint chain within jump range.',
                     'effective_jump_range_ly' => $effectiveRange,
+                    'jump_cooldown_total_minutes' => null,
+                    'jump_fatigue_risk_label' => 'not_applicable',
                 ];
             }
 
@@ -99,15 +116,6 @@ final class JumpPlanner
             $midpoints[] = $systems[$next]['name'];
             $visited[$next] = true;
             $current = $next;
-        }
-
-        if (!$this->isJumpSystemAllowed($end, $options, $jumpHighSecRestricted)) {
-            return [
-                'feasible' => false,
-                'error' => 'jump-assisted plan not feasible for current ship/skills',
-                'reason' => 'Destination is restricted by movement rules.',
-                'effective_jump_range_ly' => $effectiveRange,
-            ];
         }
 
         $segments[] = $this->segmentPayload($current, $endId, $systems);
@@ -119,27 +127,44 @@ final class JumpPlanner
                     'error' => 'jump-assisted plan not feasible for current ship/skills',
                     'reason' => 'A jump segment exceeds the effective jump range.',
                     'effective_jump_range_ly' => $effectiveRange,
+                    'jump_cooldown_total_minutes' => null,
+                    'jump_fatigue_risk_label' => 'not_applicable',
                 ];
             }
         }
 
-        [$cooldownMinutes, $fatigueHours, $fatigueRisk] = $this->estimateFatigue($segments);
+        $fatigue = $this->fatigueModel->evaluate($segments);
+        $cooldownMinutes = $fatigue['cooldown_total_minutes'];
         $jumpTime = count($segments) * self::BASE_JUMP_TIME_S;
         $dockTime = count($midpoints) * self::DOCK_OVERHEAD_S;
         $estimatedTime = $jumpTime + ($cooldownMinutes * 60) + $dockTime;
 
         [$riskScore, $exposureScore] = $this->summarizeJumpRisk($segments, $systems, $risk, $options, $npcStationIds);
+        $totalLy = 0.0;
+        foreach ($segments as $segment) {
+            $totalLy += (float) $segment['distance_ly'];
+        }
 
         return [
             'feasible' => true,
             'effective_jump_range_ly' => $effectiveRange,
             'total_jumps' => count($segments),
+            'jump_hops_count' => count($segments),
+            'jump_total_ly' => round($totalLy, 2),
             'estimated_time_s' => round($estimatedTime, 1),
-            'cooldown_minutes_estimate' => round($cooldownMinutes, 1),
-            'fatigue_hours_estimate' => round($fatigueHours, 2),
-            'fatigue_risk' => $fatigueRisk,
+            'jump_travel_time_s' => $jumpTime,
+            'jump_dock_overhead_s' => $dockTime,
+            'cooldown_minutes_estimate' => round($cooldownMinutes, 2),
+            'jump_cooldown_total_minutes' => round($cooldownMinutes, 2),
+            'fatigue_hours_estimate' => round($fatigue['fatigue_minutes'] / 60, 2),
+            'jump_fatigue_estimate_minutes' => $fatigue['fatigue_minutes'],
+            'fatigue_risk' => $fatigue['fatigue_risk_label'],
+            'jump_fatigue_risk_label' => $fatigue['fatigue_risk_label'],
             'midpoints' => $midpoints,
             'segments' => $segments,
+            'jump_segments' => $segments,
+            'jump_cooldown_per_jump_minutes' => $fatigue['cooldowns_minutes'],
+            'jump_fatigue_caps' => $fatigue['caps'],
             'risk_score' => $riskScore,
             'exposure_score' => $exposureScore,
         ];
@@ -167,7 +192,11 @@ final class JumpPlanner
                 continue;
             }
             $candidate = $systems[$candidateId] ?? null;
-            if ($candidate === null || !$this->isJumpSystemAllowed($candidate, $options, $jumpHighSecRestricted)) {
+            if ($candidate === null) {
+                continue;
+            }
+            $allowed = $this->checkJumpSystemAllowed($candidate, $options, $jumpHighSecRestricted);
+            if (!$allowed['allowed']) {
                 continue;
             }
             if ($this->distanceMeters($systems[$current], $candidate) > $rangeMeters) {
@@ -187,13 +216,41 @@ final class JumpPlanner
         return $best;
     }
 
-    private function isJumpSystemAllowed(array $system, array $options, bool $jumpHighSecRestricted): bool
+    /**
+     * @return array{allowed: bool, reason: string|null}
+     */
+    private function checkJumpSystemAllowed(array $system, array $options, bool $jumpHighSecRestricted): array
     {
         if ($jumpHighSecRestricted && $this->rules->isHighSec($system)) {
-            return false;
+            return [
+                'allowed' => false,
+                'reason' => 'Capital ships cannot jump into or out of high-sec systems.',
+            ];
         }
 
-        return $this->rules->isSystemAllowed($system, $options);
+        $security = (float) ($system['security'] ?? 0.0);
+        if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
+            return [
+                'allowed' => false,
+                'reason' => sprintf('Avoid lowsec setting blocks jump planning through %s.', $system['name'] ?? 'a low-sec system'),
+            ];
+        }
+
+        if (!empty($options['avoid_nullsec']) && $security < 0.1) {
+            return [
+                'allowed' => false,
+                'reason' => sprintf('Avoid nullsec setting blocks jump planning through %s.', $system['name'] ?? 'a null-sec system'),
+            ];
+        }
+
+        if (!$this->rules->isSystemAllowed($system, $options)) {
+            return [
+                'allowed' => false,
+                'reason' => 'Destination is restricted by movement rules.',
+            ];
+        }
+
+        return ['allowed' => true, 'reason' => null];
     }
 
     private function segmentPayload(int $from, int $to, array $systems): array
@@ -214,29 +271,6 @@ final class JumpPlanner
         $dy = (float) $from['y'] - (float) $to['y'];
         $dz = (float) $from['z'] - (float) $to['z'];
         return sqrt($dx * $dx + $dy * $dy + $dz * $dz);
-    }
-
-    private function estimateFatigue(array $segments): array
-    {
-        $fatigue = 0.0;
-        $cooldownTotal = 0.0;
-
-        foreach ($segments as $index => $_segment) {
-            $fatigue = min(self::MAX_FATIGUE_H, $fatigue + self::FATIGUE_PER_JUMP_H);
-            if ($index > 0) {
-                $cooldown = min(self::MAX_COOLDOWN_MIN, self::COOLDOWN_BASE_MIN + $fatigue * self::COOLDOWN_PER_FATIGUE_MIN);
-                $cooldownTotal += $cooldown;
-            }
-        }
-
-        $risk = 'low';
-        if ($fatigue >= 3.5) {
-            $risk = 'high';
-        } elseif ($fatigue >= 1.5) {
-            $risk = 'medium';
-        }
-
-        return [$cooldownTotal, $fatigue, $risk];
     }
 
     private function summarizeJumpRisk(array $segments, array $systems, array $risk, array $options, array $npcStationIds): array

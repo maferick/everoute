@@ -14,7 +14,7 @@ final class StargateRepository
 
     public function allEdges(): array
     {
-        $stmt = $this->connection->pdo()->query('SELECT from_system_id, to_system_id FROM stargates');
+        $stmt = $this->connection->pdo()->query('SELECT from_system_id, to_system_id, is_regional_gate FROM stargates');
         return $stmt->fetchAll();
     }
 }

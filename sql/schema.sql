@@ -15,9 +15,11 @@ CREATE TABLE IF NOT EXISTS stargates (
     id BIGINT PRIMARY KEY,
     from_system_id BIGINT NOT NULL,
     to_system_id BIGINT NOT NULL,
+    is_regional_gate TINYINT(1) NOT NULL DEFAULT 0,
     updated_at DATETIME NOT NULL,
     INDEX idx_from_system (from_system_id),
     INDEX idx_to_system (to_system_id),
+    INDEX idx_regional_gate (is_regional_gate),
     CONSTRAINT fk_stargate_from FOREIGN KEY (from_system_id) REFERENCES systems (id) ON DELETE CASCADE,
     CONSTRAINT fk_stargate_to FOREIGN KEY (to_system_id) REFERENCES systems (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
