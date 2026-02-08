@@ -38,9 +38,24 @@ final class SdeImporter
             $pdo->exec('DELETE FROM stations');
             $pdo->exec('DELETE FROM systems');
 
-            $pdo->exec('INSERT INTO systems (id, name, security, region_id, constellation_id, x, y, z, system_size_au, updated_at) SELECT id, name, security, region_id, constellation_id, x, y, z, system_size_au, updated_at FROM systems_stage');
-            $pdo->exec('INSERT INTO stargates (id, from_system_id, to_system_id, updated_at) SELECT id, from_system_id, to_system_id, updated_at FROM stargates_stage');
-            $pdo->exec('INSERT INTO stations (station_id, system_id, name, is_npc, updated_at) SELECT station_id, system_id, name, is_npc, updated_at FROM stations_stage');
+            $this->insertFromStage(
+                $pdo,
+                'systems',
+                'systems_stage',
+                ['id', 'name', 'security', 'region_id', 'constellation_id', 'x', 'y', 'z', 'system_size_au', 'updated_at']
+            );
+            $this->insertFromStage(
+                $pdo,
+                'stargates',
+                'stargates_stage',
+                ['id', 'from_system_id', 'to_system_id', 'updated_at']
+            );
+            $this->insertFromStage(
+                $pdo,
+                'stations',
+                'stations_stage',
+                ['station_id', 'system_id', 'name', 'is_npc', 'updated_at']
+            );
 
             $pdo->commit();
         } catch (\Throwable $e) {
@@ -269,6 +284,42 @@ final class SdeImporter
         } catch (\Throwable $e) {
             throw new RuntimeException(sprintf('Failed inserting batch into %s.', $table), 0, $e);
         }
+    }
+
+    /**
+     * @param array<int, string> $columns
+     */
+    private function insertFromStage(PDO $pdo, string $table, string $stageTable, array $columns): void
+    {
+        $filteredColumns = [];
+        foreach ($columns as $column) {
+            if ($this->tableHasColumn($pdo, $table, $column)) {
+                $filteredColumns[] = $column;
+            }
+        }
+
+        if ($filteredColumns === []) {
+            throw new RuntimeException(sprintf('No matching columns found for %s.', $table));
+        }
+
+        $columnList = implode(', ', $filteredColumns);
+        $pdo->exec(sprintf(
+            'INSERT INTO %s (%s) SELECT %s FROM %s',
+            $table,
+            $columnList,
+            $columnList,
+            $stageTable
+        ));
+    }
+
+    private function tableHasColumn(PDO $pdo, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare(
+            'SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = :table AND column_name = :column'
+        );
+        $stmt->execute(['table' => $table, 'column' => $column]);
+
+        return (bool) $stmt->fetchColumn();
     }
 
     private function report(?callable $progress, string $message): void
