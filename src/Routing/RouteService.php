@@ -28,6 +28,10 @@ final class RouteService
     private ?GateDistanceRepository $gateDistancesRepo;
     /** @var array<int, array<int, int>> */
     private array $gateDistanceCache = [];
+    /** @var array<int, array<string, float>> */
+    private array $gateCostCache = [];
+    /** @var array<int, array<string, bool>> */
+    private array $gateAllowCache = [];
 
     public function __construct(
         private SystemRepository $systemsRepo,
@@ -145,6 +149,19 @@ final class RouteService
 
         if (empty($pathResult['path'])) {
             return ['error' => 'No route found'];
+        }
+
+        if ($pathResult['status'] === 'partial') {
+            $fallbackPath = $this->computeFallbackGatePath($startId, $endId, $options, $weights, $avoidLow, $avoidNull, $avoidSet);
+            if (!empty($fallbackPath['path'])) {
+                $pathResult = $fallbackPath;
+            } else {
+                $this->logger->warning('Route search exhausted', [
+                    'status' => $pathResult['status'],
+                    'nodes_explored' => $pathResult['nodes_explored'],
+                ]);
+                return ['error' => 'No route found'];
+            }
         }
 
         $summary = $this->summarizeRoute($pathResult['path'], $options);
@@ -347,13 +364,17 @@ final class RouteService
     private function buildGateCostFn(array $options, array $weights, bool $avoidLow, bool $avoidNull, array $avoidSet): callable
     {
         return function (int $from, int $to) use ($options, $weights, $avoidLow, $avoidNull, $avoidSet): float {
+            $cacheKey = $this->gateCostCacheKey($options, $weights, $avoidLow, $avoidNull, $avoidSet);
+            if (isset($this->gateCostCache[$to][$cacheKey])) {
+                return $this->gateCostCache[$to][$cacheKey];
+            }
             $system = $this->systems[$to] ?? null;
             if ($system === null) {
-                return INF;
+                return $this->gateCostCache[$to][$cacheKey] = INF;
             }
 
             if (!$this->isGateSystemAllowed($system, $options, $avoidLow, $avoidNull, $avoidSet)) {
-                return INF;
+                return $this->gateCostCache[$to][$cacheKey] = INF;
             }
 
             $risk = $this->risk[$to] ?? [];
@@ -361,31 +382,40 @@ final class RouteService
             $hasNpc = !empty($system['has_npc_station']);
             $costs = $this->calculator->cost($system, $risk, $isChokepoint, $hasNpc, $options);
 
-            return $costs['travel'] * $weights['travel_weight']
+            $total = $costs['travel'] * $weights['travel_weight']
                 + $costs['risk'] * $weights['risk_weight']
                 + $costs['exposure'] * $weights['exposure_weight']
                 + $costs['infrastructure'];
+
+            $this->gateCostCache[$to][$cacheKey] = $total;
+            return $total;
         };
     }
 
     private function isGateSystemAllowed(array $system, array $options, bool $avoidLow, bool $avoidNull, array $avoidSet): bool
     {
+        $cacheKey = $this->gateAllowCacheKey($options, $avoidLow, $avoidNull, $avoidSet);
+        $systemId = (int) ($system['id'] ?? 0);
+        if ($systemId && isset($this->gateAllowCache[$systemId][$cacheKey])) {
+            return $this->gateAllowCache[$systemId][$cacheKey];
+        }
+
         if (!$this->rules->isSystemAllowed($system, $options)) {
-            return false;
+            return $this->gateAllowCache[$systemId][$cacheKey] = false;
         }
 
         $security = (float) ($system['security'] ?? 0);
         if ($avoidNull && $security < 0.1) {
-            return false;
+            return $this->gateAllowCache[$systemId][$cacheKey] = false;
         }
         if ($avoidLow && $security >= 0.1 && $security < 0.5) {
-            return false;
+            return $this->gateAllowCache[$systemId][$cacheKey] = false;
         }
         if (isset($avoidSet[$system['name']])) {
-            return false;
+            return $this->gateAllowCache[$systemId][$cacheKey] = false;
         }
 
-        return true;
+        return $this->gateAllowCache[$systemId][$cacheKey] = true;
     }
 
     private function computeGatePath(
@@ -426,6 +456,41 @@ final class RouteService
             $heuristic,
             $allowFn,
             $corridor,
+            $maxNodes,
+            $maxSeconds
+        );
+    }
+
+    private function computeFallbackGatePath(
+        int $startId,
+        int $endId,
+        array $options,
+        array $weights,
+        bool $avoidLow,
+        bool $avoidNull,
+        array $avoidSet
+    ): array {
+        $astar = new AStar();
+        $costFn = $this->buildGateCostFn($options, $weights, $avoidLow, $avoidNull, $avoidSet);
+        $heuristic = function (int $node) use ($endId): float {
+            return JumpMath::distanceLy($this->systems[$node], $this->systems[$endId]);
+        };
+        $allowFn = function (int $node) use ($options, $avoidLow, $avoidNull, $avoidSet): bool {
+            $system = $this->systems[$node] ?? null;
+            return $system !== null && $this->isGateSystemAllowed($system, $options, $avoidLow, $avoidNull, $avoidSet);
+        };
+        $baseLimits = $this->gateSearchLimits();
+        $maxNodes = Env::int('ROUTE_FALLBACK_MAX_NODES', max(2500, $baseLimits[0] * 2));
+        $maxSeconds = Env::int('ROUTE_FALLBACK_MAX_MS', max(600, (int) ($baseLimits[1] * 1000 * 2))) / 1000;
+
+        return $astar->shortestPath(
+            $this->gateNeighbors,
+            $startId,
+            $endId,
+            $costFn,
+            $heuristic,
+            $allowFn,
+            null,
             $maxNodes,
             $maxSeconds
         );
@@ -785,6 +850,8 @@ final class RouteService
         GraphStore::load($this->systemsRepo, $this->stargatesRepo, $this->logger);
         $this->systems = GraphStore::systems();
         $this->gateDistanceCache = [];
+        $this->gateCostCache = [];
+        $this->gateAllowCache = [];
 
         $this->risk = [];
         $now = time();
@@ -849,7 +916,7 @@ final class RouteService
         }
 
         $direct = JumpMath::distanceLy($start, $end);
-        $limit = $direct * 3.0;
+        $limit = $direct * Env::float('ROUTE_CORRIDOR_LY_MULTIPLIER', 4.5);
         $allowed = [];
 
         foreach ($this->systems as $id => $system) {
@@ -873,7 +940,7 @@ final class RouteService
         }
 
         $maxHops = Env::int('GATE_DISTANCE_MAX_HOPS', 20);
-        $flex = Env::int('GATE_CORRIDOR_HOP_FLEX', 6);
+        $flex = Env::int('GATE_CORRIDOR_HOP_FLEX', 10);
         $startDistances = $this->gateDistanceCache[$startId] ?? $this->gateDistancesRepo->distancesFrom($startId, $maxHops);
         $this->gateDistanceCache[$startId] = $startDistances;
         $endDistances = $this->gateDistanceCache[$endId] ?? $this->gateDistancesRepo->distancesFrom($endId, $maxHops);
@@ -900,6 +967,38 @@ final class RouteService
         $allowed[$startId] = true;
         $allowed[$endId] = true;
         return $allowed;
+    }
+
+    private function gateCostCacheKey(array $options, array $weights, bool $avoidLow, bool $avoidNull, array $avoidSet): string
+    {
+        $payload = [
+            'ship' => $options['ship_class'] ?? null,
+            'prefer_npc' => !empty($options['prefer_npc']),
+            'ship_modifier' => $options['ship_modifier'] ?? 1.0,
+            'avoid_low' => $avoidLow,
+            'avoid_null' => $avoidNull,
+            'avoid_systems' => count($avoidSet),
+            'weights' => [
+                'r' => round((float) $weights['risk_weight'], 3),
+                't' => round((float) $weights['travel_weight'], 3),
+                'e' => round((float) $weights['exposure_weight'], 3),
+            ],
+        ];
+
+        return hash('sha256', json_encode($payload, JSON_UNESCAPED_SLASHES));
+    }
+
+    private function gateAllowCacheKey(array $options, bool $avoidLow, bool $avoidNull, array $avoidSet): string
+    {
+        $payload = [
+            'ship' => $options['ship_class'] ?? null,
+            'avoid_low' => $avoidLow,
+            'avoid_null' => $avoidNull,
+            'avoid_systems' => array_keys($avoidSet),
+        ];
+        sort($payload['avoid_systems']);
+
+        return hash('sha256', json_encode($payload, JSON_UNESCAPED_SLASHES));
     }
 
     private function routeCacheKey(int $startId, int $endId, array $options): string

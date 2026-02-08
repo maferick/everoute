@@ -37,6 +37,7 @@ final class AStar
         $nodesExplored = 0;
         $bestNode = $start;
         $bestHeuristic = $fScore[$start];
+        $closed = [];
 
         while (!$queue->isEmpty()) {
             $elapsed = microtime(true) - $startTime;
@@ -45,6 +46,10 @@ final class AStar
             }
 
             $current = $queue->extract();
+            if (isset($closed[$current])) {
+                continue;
+            }
+            $closed[$current] = true;
             $nodesExplored++;
 
             if ($current === $goal) {
@@ -72,6 +77,10 @@ final class AStar
                     $neighbor = (int) $neighborKey;
                 }
 
+                if (isset($closed[$neighbor])) {
+                    continue;
+                }
+
                 if ($neighbor !== $goal) {
                     if ($allowedSet !== null && !isset($allowedSet[$neighbor])) {
                         continue;
@@ -81,7 +90,11 @@ final class AStar
                     }
                 }
 
-                $tentative = $gScore[$current] + $costFn($current, $neighbor, $edgeData);
+                $edgeCost = $costFn($current, $neighbor, $edgeData);
+                if ($edgeCost === INF) {
+                    continue;
+                }
+                $tentative = $gScore[$current] + $edgeCost;
                 if (!isset($gScore[$neighbor]) || $tentative < $gScore[$neighbor]) {
                     $cameFrom[$neighbor] = $current;
                     $gScore[$neighbor] = $tentative;

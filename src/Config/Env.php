@@ -54,4 +54,14 @@ final class Env
 
         return (int) $value;
     }
+
+    public static function float(string $key, float $default): float
+    {
+        $value = self::get($key);
+        if ($value === null) {
+            return $default;
+        }
+
+        return (float) $value;
+    }
 }
