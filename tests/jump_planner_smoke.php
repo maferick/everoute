@@ -3,23 +3,28 @@
 declare(strict_types=1);
 
 use Everoute\Routing\JumpFatigueModel;
+use Everoute\Routing\JumpMath;
 use Everoute\Routing\JumpPlanner;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\MovementRules;
 use Everoute\Routing\WeightCalculator;
+use Everoute\Security\Logger;
 
 $autoload = __DIR__ . '/../vendor/autoload.php';
 if (file_exists($autoload)) {
     require_once $autoload;
 } else {
+    require_once __DIR__ . '/../src/Config/Env.php';
     require_once __DIR__ . '/../src/Routing/JumpFatigueModel.php';
+    require_once __DIR__ . '/../src/Routing/JumpMath.php';
     require_once __DIR__ . '/../src/Routing/JumpPlanner.php';
     require_once __DIR__ . '/../src/Routing/JumpRangeCalculator.php';
     require_once __DIR__ . '/../src/Routing/MovementRules.php';
     require_once __DIR__ . '/../src/Routing/WeightCalculator.php';
+    require_once __DIR__ . '/../src/Security/Logger.php';
 }
 
-$metersPerLy = 9.4607e15;
+$metersPerLy = JumpMath::METERS_PER_LY;
 
 $systems = [
     1 => ['id' => 1, 'name' => 'Start', 'security' => 0.2, 'x' => 0.0, 'y' => 0.0, 'z' => 0.0],
@@ -41,7 +46,8 @@ $planner = new JumpPlanner(
     new JumpRangeCalculator(__DIR__ . '/../config/jump_ranges.php'),
     new WeightCalculator(),
     new MovementRules(),
-    new JumpFatigueModel()
+    new JumpFatigueModel(),
+    new Logger()
 );
 
 $plan = $planner->plan(1, 2, $systems, $risk, $options, [], [1, 2]);

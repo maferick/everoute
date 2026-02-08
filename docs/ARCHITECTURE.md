@@ -27,8 +27,8 @@ Everoute is a lightweight PHP 8.3 application with a minimal routing engine.
 
 ## Jump Fatigue Model (v1)
 - Deterministic per-jump fatigue score based on jump distance.
-- Each jump accrues base fatigue + distance factor, with caps applied.
-- Activation cooldown scales with current fatigue and is capped.
+- Each jump accrues base fatigue + distance factor, with caps applied (fatigue max 300 minutes).
+- Activation cooldown scales with distance and current fatigue, capped at 30 minutes.
 - Risk labels: low (<60 min), medium (60-179 min), high (>=180 min).
 
 ## Explainability

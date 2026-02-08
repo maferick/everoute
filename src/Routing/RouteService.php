@@ -9,6 +9,7 @@ use Everoute\Risk\RiskRepository;
 use Everoute\Security\Logger;
 use Everoute\Universe\StargateRepository;
 use Everoute\Universe\SystemRepository;
+use Everoute\Routing\JumpMath;
 
 final class RouteService
 {
@@ -417,11 +418,7 @@ final class RouteService
 
     private function distanceLy(array $from, array $to): float
     {
-        $dx = (float) $from['x'] - (float) $to['x'];
-        $dy = (float) $from['y'] - (float) $to['y'];
-        $dz = (float) $from['z'] - (float) $to['z'];
-        $distanceMeters = sqrt($dx * $dx + $dy * $dy + $dz * $dz);
-        return $distanceMeters / 9.4607e15;
+        return JumpMath::distanceLy($from, $to);
     }
 
     private function computeHybridPlan(
@@ -444,7 +441,7 @@ final class RouteService
             return [
                 'feasible' => false,
                 'reason' => $avoidLow || $avoidNull
-                    ? 'Hybrid planning blocked by low/null-sec avoidance settings.'
+                    ? 'Hybrid planning could not find a launch system within the configured gate hop limit. Avoid low/null-sec settings may be too restrictive for capital repositioning.'
                     : 'No launch systems available within the configured gate hop limit.',
                 'gate_segment' => [],
                 'jump_segment' => [],
@@ -607,7 +604,7 @@ final class RouteService
             return [
                 'feasible' => false,
                 'reason' => $avoidLow || $avoidNull
-                    ? 'Hybrid planning blocked by low/null-sec avoidance settings.'
+                    ? 'Hybrid planning could not find a launch/landing jump chain. Avoid low/null-sec settings may be too restrictive for capital repositioning.'
                     : 'No hybrid plan could find a valid launch and landing chain.',
                 'gate_segment' => [],
                 'jump_segment' => [],

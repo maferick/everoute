@@ -7,10 +7,10 @@ namespace Everoute\Routing;
 final class JumpFatigueModel
 {
     private const MAX_FATIGUE_MIN = 300.0;
-    private const BASE_FATIGUE_PER_JUMP_MIN = 5.0;
-    private const FATIGUE_PER_LY_MIN = 1.5;
-    private const COOLDOWN_BASE_MIN = 1.5;
-    private const COOLDOWN_PER_FATIGUE_MIN = 0.04;
+    private const COOLDOWN_BASE_PER_LY_MIN = 1.0;
+    private const COOLDOWN_FATIGUE_SCALE = 60.0;
+    private const FATIGUE_BASE_PER_JUMP_MIN = 5.0;
+    private const FATIGUE_PER_LY_MIN = 6.0;
     private const MAX_COOLDOWN_MIN = 30.0;
 
     /**
@@ -30,12 +30,13 @@ final class JumpFatigueModel
         $cooldownTotal = 0.0;
 
         foreach ($segments as $segment) {
-            $distanceLy = (float) ($segment['distance_ly'] ?? 0.0);
-            $fatigue = min(
-                self::MAX_FATIGUE_MIN,
-                $fatigue + self::BASE_FATIGUE_PER_JUMP_MIN + ($distanceLy * self::FATIGUE_PER_LY_MIN)
-            );
-            $cooldown = min(self::MAX_COOLDOWN_MIN, self::COOLDOWN_BASE_MIN + ($fatigue * self::COOLDOWN_PER_FATIGUE_MIN));
+            $distanceLy = max(0.0, (float) ($segment['distance_ly'] ?? 0.0));
+            $cooldownBase = max(1.0, $distanceLy * self::COOLDOWN_BASE_PER_LY_MIN);
+            $cooldown = min(self::MAX_COOLDOWN_MIN, $cooldownBase * (1 + ($fatigue / self::COOLDOWN_FATIGUE_SCALE)));
+
+            $fatigueIncrease = self::FATIGUE_BASE_PER_JUMP_MIN + ($distanceLy * self::FATIGUE_PER_LY_MIN);
+            $fatigue = min(self::MAX_FATIGUE_MIN, $fatigue + $fatigueIncrease);
+
             $cooldowns[] = round($cooldown, 2);
             $cooldownTotal += $cooldown;
         }
