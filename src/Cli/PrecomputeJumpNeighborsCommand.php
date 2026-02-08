@@ -44,6 +44,11 @@ final class PrecomputeJumpNeighborsCommand extends Command
             $output->writeln('<error>Missing jump_neighbors table. Run sql/schema.sql to initialize the database schema.</error>');
             return Command::FAILURE;
         }
+        $rangeColumn = $this->resolveRangeColumn($pdo);
+        if ($rangeColumn === null) {
+            $output->writeln('<error>Missing range column on jump_neighbors. Expected range_ly or range.</error>');
+            return Command::FAILURE;
+        }
         $checkpointRepo = new PrecomputeCheckpointRepository($connection);
         $rangeCalculator = new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php');
         $ranges = $this->parseRanges($rangeOption, $rangeCalculator->rangeBuckets());
@@ -66,13 +71,13 @@ final class PrecomputeJumpNeighborsCommand extends Command
         $startedAt = microtime(true);
         $totalStoredBytes = 0;
 
-        $this->purgeUnsupportedRanges($output, $pdo, max($ranges));
+        $this->purgeUnsupportedRanges($output, $pdo, max($ranges), $rangeColumn);
 
         foreach ($ranges as $rangeLy) {
             $jobKey = 'jump_neighbors:' . $rangeLy;
             if (!$resume) {
                 $output->writeln(sprintf('<comment>Clearing jump_neighbors for %d LY...</comment>', $rangeLy));
-                $stmt = $pdo->prepare('DELETE FROM jump_neighbors WHERE range_ly = :range');
+                $stmt = $pdo->prepare(sprintf('DELETE FROM jump_neighbors WHERE %s = :range', $rangeColumn));
                 $stmt->execute(['range' => $rangeLy]);
                 $checkpointRepo->clear($jobKey);
             }
@@ -104,11 +109,12 @@ final class PrecomputeJumpNeighborsCommand extends Command
                     $storageWarningBytes = 0;
                 }
 
-                $stmt = $pdo->prepare(
-                    'INSERT INTO jump_neighbors (system_id, range_ly, neighbor_count, neighbor_ids_blob, updated_at)
+                $stmt = $pdo->prepare(sprintf(
+                    'INSERT INTO jump_neighbors (system_id, %s, neighbor_count, neighbor_ids_blob, updated_at)
                     VALUES (:system_id, :range_ly, :neighbor_count, :payload, NOW())
-                    ON DUPLICATE KEY UPDATE neighbor_count = VALUES(neighbor_count), neighbor_ids_blob = VALUES(neighbor_ids_blob), updated_at = VALUES(updated_at)'
-                );
+                    ON DUPLICATE KEY UPDATE neighbor_count = VALUES(neighbor_count), neighbor_ids_blob = VALUES(neighbor_ids_blob), updated_at = VALUES(updated_at)',
+                    $rangeColumn
+                ));
                 $stmt->execute([
                     'system_id' => $systemId,
                     'range_ly' => $rangeLy,
@@ -193,9 +199,9 @@ final class PrecomputeJumpNeighborsCommand extends Command
         return array_slice($neighbors, 0, $cap, true);
     }
 
-    private function purgeUnsupportedRanges(OutputInterface $output, \PDO $pdo, int $maxRange): void
+    private function purgeUnsupportedRanges(OutputInterface $output, \PDO $pdo, int $maxRange, string $rangeColumn): void
     {
-        $stmt = $pdo->prepare('DELETE FROM jump_neighbors WHERE range_ly > :max_range');
+        $stmt = $pdo->prepare(sprintf('DELETE FROM jump_neighbors WHERE %s > :max_range', $rangeColumn));
         $stmt->execute(['max_range' => $maxRange]);
         $removed = $stmt->rowCount();
         if ($removed > 0) {
@@ -239,5 +245,28 @@ final class PrecomputeJumpNeighborsCommand extends Command
         );
         $stmt->execute(['table' => $table]);
         return (bool) $stmt->fetchColumn();
+    }
+
+    private function resolveRangeColumn(\PDO $pdo): ?string
+    {
+        $stmt = $pdo->prepare(
+            'SELECT column_name FROM information_schema.columns
+             WHERE table_schema = DATABASE()
+               AND table_name = :table
+               AND (column_name = :range_ly OR column_name = :range)'
+        );
+        $stmt->execute([
+            'table' => 'jump_neighbors',
+            'range_ly' => 'range_ly',
+            'range' => 'range',
+        ]);
+        $columns = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+        if (in_array('range_ly', $columns, true)) {
+            return 'range_ly';
+        }
+        if (in_array('range', $columns, true)) {
+            return 'range';
+        }
+        return null;
     }
 }

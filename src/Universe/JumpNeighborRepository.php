@@ -8,6 +8,8 @@ use Everoute\DB\Connection;
 
 final class JumpNeighborRepository
 {
+    private ?string $rangeColumn = null;
+
     public function __construct(private Connection $connection)
     {
     }
@@ -16,14 +18,18 @@ final class JumpNeighborRepository
     public function loadRangeBucket(int $rangeBucket, int $expectedSystems): ?array
     {
         $pdo = $this->connection->pdo();
-        $countStmt = $pdo->prepare('SELECT COUNT(*) FROM jump_neighbors WHERE range_ly = :range');
+        $rangeColumn = $this->resolveRangeColumn($pdo);
+        $countStmt = $pdo->prepare(sprintf('SELECT COUNT(*) FROM jump_neighbors WHERE %s = :range', $rangeColumn));
         $countStmt->execute(['range' => $rangeBucket]);
         $count = (int) $countStmt->fetchColumn();
         if ($count < $expectedSystems) {
             return null;
         }
 
-        $stmt = $pdo->prepare('SELECT system_id, neighbor_ids_blob FROM jump_neighbors WHERE range_ly = :range');
+        $stmt = $pdo->prepare(sprintf(
+            'SELECT system_id, neighbor_ids_blob FROM jump_neighbors WHERE %s = :range',
+            $rangeColumn
+        ));
         $stmt->execute(['range' => $rangeBucket]);
         $neighbors = [];
         while ($row = $stmt->fetch()) {
@@ -44,5 +50,35 @@ final class JumpNeighborRepository
         }
 
         return $neighbors;
+    }
+
+    private function resolveRangeColumn(\PDO $pdo): string
+    {
+        if ($this->rangeColumn !== null) {
+            return $this->rangeColumn;
+        }
+
+        $stmt = $pdo->prepare(
+            'SELECT column_name FROM information_schema.columns
+             WHERE table_schema = DATABASE()
+               AND table_name = :table
+               AND (column_name = :range_ly OR column_name = :range)'
+        );
+        $stmt->execute([
+            'table' => 'jump_neighbors',
+            'range_ly' => 'range_ly',
+            'range' => 'range',
+        ]);
+        $columns = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+        if (in_array('range_ly', $columns, true)) {
+            $this->rangeColumn = 'range_ly';
+            return $this->rangeColumn;
+        }
+        if (in_array('range', $columns, true)) {
+            $this->rangeColumn = 'range';
+            return $this->rangeColumn;
+        }
+
+        throw new \RuntimeException('Missing range column on jump_neighbors. Expected range_ly or range.');
     }
 }
