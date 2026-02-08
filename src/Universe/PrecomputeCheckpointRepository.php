@@ -27,9 +27,9 @@ final class PrecomputeCheckpointRepository
     {
         $this->connection->pdo()->prepare(
             'INSERT INTO precompute_checkpoints (job_key, `cursor`, started_at, updated_at)
-            VALUES (:job, :cursor, COALESCE((SELECT started_at FROM precompute_checkpoints WHERE job_key = :job), NOW()), NOW())
+            VALUES (:job, :cursor, COALESCE((SELECT started_at FROM precompute_checkpoints WHERE job_key = :job_lookup), NOW()), NOW())
             ON DUPLICATE KEY UPDATE `cursor` = VALUES(`cursor`), updated_at = VALUES(updated_at)'
-        )->execute(['job' => $jobKey, 'cursor' => $cursor]);
+        )->execute(['job' => $jobKey, 'job_lookup' => $jobKey, 'cursor' => $cursor]);
     }
 
     public function clear(string $jobKey): void
