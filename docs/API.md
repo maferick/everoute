@@ -77,4 +77,4 @@ Returns system metadata and risk stats.
 Returns risk stats for all systems and update timestamp.
 
 ## GET /health
-Returns `{ "status": "ok" }`.
+Returns `{ "status": "ok", "risk_provider": "manual|zkillredisq" }` plus risk update timestamps and ingestion heartbeat when available.

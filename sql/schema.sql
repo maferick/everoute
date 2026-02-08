@@ -43,6 +43,17 @@ CREATE TABLE IF NOT EXISTS system_risk (
     CONSTRAINT fk_risk_system FOREIGN KEY (system_id) REFERENCES systems (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS kill_events (
+    killmail_id BIGINT PRIMARY KEY,
+    system_id BIGINT NOT NULL,
+    happened_at DATETIME NOT NULL,
+    victim_ship_type_id BIGINT NULL,
+    is_pod_kill TINYINT(1) NOT NULL DEFAULT 0,
+    INDEX idx_kill_events_system_time (system_id, happened_at),
+    INDEX idx_kill_events_time (happened_at),
+    CONSTRAINT fk_kill_events_system FOREIGN KEY (system_id) REFERENCES systems (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS chokepoints (
     system_id BIGINT PRIMARY KEY,
     reason VARCHAR(255) NULL,
