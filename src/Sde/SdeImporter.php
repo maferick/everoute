@@ -190,6 +190,7 @@ final class SdeImporter
         $batch = [];
         $count = 0;
         foreach (SdeJsonlReader::read($path) as $row) {
+            $row = $this->normalizeRecord($row);
             $mappedRow = $this->mapSystemRow($row, $now);
             if ($mappedRow['id'] <= 0) {
                 continue;
@@ -227,7 +228,8 @@ final class SdeImporter
         $destinations = [];
 
         foreach (SdeJsonlReader::read($path) as $row) {
-            $id = (int) ($row['stargateID'] ?? $row['id'] ?? $row['_key'] ?? 0);
+            $row = $this->normalizeRecord($row);
+            $id = (int) ($row['stargateID'] ?? $row['id'] ?? $row['_key'] ?? $row['key'] ?? 0);
             $fromSystem = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['system_id'] ?? 0);
             if ($id <= 0 || $fromSystem <= 0) {
                 continue;
@@ -292,7 +294,8 @@ final class SdeImporter
         $rows = [];
         $count = 0;
         foreach (SdeJsonlReader::read($path) as $row) {
-            $stationId = (int) ($row['stationID'] ?? $row['stationId'] ?? $row['id'] ?? $row['_key'] ?? 0);
+            $row = $this->normalizeRecord($row);
+            $stationId = (int) ($row['stationID'] ?? $row['stationId'] ?? $row['id'] ?? $row['_key'] ?? $row['key'] ?? 0);
             $systemId = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['system_id'] ?? 0);
             if ($stationId <= 0 || $systemId <= 0) {
                 continue;
@@ -418,9 +421,28 @@ final class SdeImporter
         }
     }
 
+    private function normalizeRecord(array $row): array
+    {
+        $payload = $row;
+        foreach (['value', 'data'] as $key) {
+            if (isset($row[$key]) && is_array($row[$key])) {
+                $payload = $row[$key];
+                break;
+            }
+        }
+
+        foreach (['id', '_key', 'key'] as $idKey) {
+            if (!array_key_exists($idKey, $payload) && array_key_exists($idKey, $row)) {
+                $payload[$idKey] = $row[$idKey];
+            }
+        }
+
+        return $payload;
+    }
+
     private function mapSystemRow(array $row, string $now): array
     {
-        $id = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['id'] ?? $row['_key'] ?? 0);
+        $id = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['id'] ?? $row['_key'] ?? $row['key'] ?? 0);
         $name = $this->normalizeName($row['solarSystemName'] ?? $row['name'] ?? null, 'Unknown');
         $security = (float) ($row['security'] ?? $row['securityStatus'] ?? 0.0);
         $regionId = $row['regionID'] ?? $row['regionId'] ?? $row['region_id'] ?? null;
