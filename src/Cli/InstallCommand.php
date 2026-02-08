@@ -19,6 +19,7 @@ final class InstallCommand extends Command
     protected function configure(): void
     {
         $this
+            ->setName('install')
             ->setDescription('Install Everoute database and user')
             ->addOption('schema-only', null, InputOption::VALUE_NONE, 'Apply schema and seed only')
             ->addOption('admin-user', null, InputOption::VALUE_REQUIRED, 'Admin DB user')
