@@ -19,13 +19,6 @@ final class JumpNeighborRepository
     {
         $pdo = $this->connection->pdo();
         $rangeColumn = $this->resolveRangeColumn($pdo);
-        $countStmt = $pdo->prepare(sprintf('SELECT COUNT(*) FROM jump_neighbors WHERE %s = :range', $rangeColumn));
-        $countStmt->execute(['range' => $rangeBucket]);
-        $count = (int) $countStmt->fetchColumn();
-        if ($count < $expectedSystems) {
-            return null;
-        }
-
         $stmt = $pdo->prepare(sprintf(
             'SELECT system_id, neighbor_ids_blob FROM jump_neighbors WHERE %s = :range',
             $rangeColumn
@@ -47,6 +40,10 @@ final class JumpNeighborRepository
                 $decoded = [];
             }
             $neighbors[(int) $row['system_id']] = $decoded;
+        }
+
+        if (count($neighbors) < $expectedSystems) {
+            return null;
         }
 
         return $neighbors;

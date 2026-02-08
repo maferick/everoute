@@ -12,7 +12,6 @@ final class JumpPlanner
 {
     private const BASE_JUMP_TIME_S = 60;
     private const DOCK_OVERHEAD_S = 90;
-    private bool $jumpNeighborsLoaded = false;
     /** @var array<float, array<int, array<int, float>>> */
     private array $jumpNeighbors = [];
     /** @var float[] */
@@ -28,49 +27,52 @@ final class JumpPlanner
         private ?JumpNeighborRepository $jumpNeighborRepo = null
     ) {
         $this->neighborBuilder = new JumpNeighborGraphBuilder();
+        $this->jumpRangeBuckets = $this->rangeCalculator->rangeBuckets();
     }
 
-    public function preloadJumpGraphs(array $systems): void
+    public function preloadJumpGraphs(array $systems, ?array $rangeBuckets = null): void
     {
-        if ($this->jumpNeighborsLoaded) {
+        $ranges = $rangeBuckets ?? $this->jumpRangeBuckets;
+        foreach ($ranges as $rangeLy) {
+            $this->loadRangeBucket((float) $rangeLy, $systems);
+        }
+        $this->logger->info('Jump neighbor graph loaded', [
+            'range_buckets' => count($ranges),
+            'systems' => count($systems),
+        ]);
+    }
+
+    private function loadRangeBucket(float $rangeLy, array $systems): void
+    {
+        if (isset($this->jumpNeighbors[$rangeLy])) {
             return;
         }
 
-        $this->jumpRangeBuckets = $this->rangeCalculator->rangeBuckets();
         $systemCount = count($systems);
-        foreach ($this->jumpRangeBuckets as $rangeLy) {
-            $neighbors = null;
-            if ($this->jumpNeighborRepo !== null) {
-                $neighbors = $this->jumpNeighborRepo->loadRangeBucket((int) $rangeLy, $systemCount);
-                if ($neighbors !== null) {
-                    $this->jumpNeighbors[$rangeLy] = $neighbors;
-                    $this->logger->info('Loaded precomputed jump neighbors', [
-                        'range_ly' => $rangeLy,
-                        'systems' => $systemCount,
-                    ]);
-                    continue;
-                }
+        if ($this->jumpNeighborRepo !== null) {
+            $neighbors = $this->jumpNeighborRepo->loadRangeBucket((int) $rangeLy, $systemCount);
+            if ($neighbors !== null) {
+                $this->jumpNeighbors[$rangeLy] = $neighbors;
+                $this->logger->info('Loaded precomputed jump neighbors', [
+                    'range_ly' => $rangeLy,
+                    'systems' => $systemCount,
+                ]);
+                return;
             }
-
-            $rangeMeters = $rangeLy * JumpMath::METERS_PER_LY;
-            $bucketIndex = $this->neighborBuilder->buildSpatialBuckets($systems, $rangeMeters);
-            $neighbors = [];
-            foreach ($systems as $id => $system) {
-                $neighbors[$id] = $this->capNeighbors(
-                    $this->neighborBuilder->buildNeighborsForSystem($system, $systems, $bucketIndex, $rangeMeters),
-                    $this->rangeCalculator->neighborCapPerSystem(),
-                    $id,
-                    (int) $rangeLy
-                );
-            }
-            $this->jumpNeighbors[$rangeLy] = $neighbors;
         }
 
-        $this->jumpNeighborsLoaded = true;
-        $this->logger->info('Jump neighbor graph loaded', [
-            'range_buckets' => count($this->jumpRangeBuckets),
-            'systems' => count($systems),
-        ]);
+        $rangeMeters = $rangeLy * JumpMath::METERS_PER_LY;
+        $bucketIndex = $this->neighborBuilder->buildSpatialBuckets($systems, $rangeMeters);
+        $neighbors = [];
+        foreach ($systems as $id => $system) {
+            $neighbors[$id] = $this->capNeighbors(
+                $this->neighborBuilder->buildNeighborsForSystem($system, $systems, $bucketIndex, $rangeMeters),
+                $this->rangeCalculator->neighborCapPerSystem(),
+                $id,
+                (int) $rangeLy
+            );
+        }
+        $this->jumpNeighbors[$rangeLy] = $neighbors;
     }
 
     /** @param array<int, float> $neighbors */
@@ -154,8 +156,10 @@ final class JumpPlanner
             ];
         }
 
-        $this->preloadJumpGraphs($systems);
         $rangeBucket = $this->resolveRangeBucket($effectiveRange);
+        if ($rangeBucket !== null) {
+            $this->loadRangeBucket($rangeBucket, $systems);
+        }
         if ($rangeBucket === null || !isset($this->jumpNeighbors[$rangeBucket])) {
             return [
                 'feasible' => false,

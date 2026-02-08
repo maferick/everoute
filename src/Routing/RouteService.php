@@ -880,7 +880,9 @@ final class RouteService
         $this->adjacency = GraphStore::adjacency();
         $this->reverseAdjacency = GraphStore::reverseAdjacency();
 
-        $this->jumpPlanner->preloadJumpGraphs($this->systems);
+        if (Env::bool('JUMP_NEIGHBOR_PRELOAD_ALL', false)) {
+            $this->jumpPlanner->preloadJumpGraphs($this->systems);
+        }
 
         $this->logger->info('Route data loaded', ['systems' => count($this->systems), 'risk' => count($this->risk)]);
     }
