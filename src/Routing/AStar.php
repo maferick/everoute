@@ -38,6 +38,7 @@ final class AStar
         $bestNode = $start;
         $bestHeuristic = $fScore[$start];
         $closed = [];
+        $timedOut = false;
 
         while (!$queue->isEmpty()) {
             $elapsed = microtime(true) - $startTime;
@@ -70,6 +71,12 @@ final class AStar
             }
 
             foreach ($neighborsByNode[$current] ?? [] as $neighborKey => $edgeData) {
+                $elapsed = microtime(true) - $startTime;
+                if ($elapsed >= $maxSeconds) {
+                    $timedOut = true;
+                    break;
+                }
+
                 if (is_int($edgeData)) {
                     $neighbor = $edgeData;
                     $edgeData = null;
@@ -101,6 +108,10 @@ final class AStar
                     $fScore[$neighbor] = $tentative + $heuristicFn($neighbor);
                     $queue->insert($neighbor, -$fScore[$neighbor]);
                 }
+            }
+
+            if ($timedOut) {
+                break;
             }
         }
 
