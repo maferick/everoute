@@ -132,7 +132,7 @@ final class JumpPlanner
         }
 
         $jumpHighSecRestricted = $this->rules->isCapitalRestricted($options) || $shipType === 'jump_freighter';
-        $startAllowed = $this->checkJumpSystemAllowed($start, $options, $jumpHighSecRestricted);
+        $startAllowed = $this->checkJumpEndpointAllowed($start, $options, 'start');
         if (!$startAllowed['allowed']) {
             return [
                 'feasible' => false,
@@ -144,7 +144,7 @@ final class JumpPlanner
             ];
         }
 
-        $endAllowed = $this->checkJumpSystemAllowed($end, $options, $jumpHighSecRestricted);
+        $endAllowed = $this->checkJumpEndpointAllowed($end, $options, 'end');
         if (!$endAllowed['allowed']) {
             return [
                 'feasible' => false,
@@ -208,6 +208,23 @@ final class JumpPlanner
 
         if ($debugEnabled && $plannerDebug !== []) {
             $this->logger->info('Jump planning debug', $plannerDebug + $planResult['debug']);
+        }
+
+        $chainValidation = $this->validateChain($segments, $systems, $options);
+        if (!$chainValidation['valid']) {
+            $this->logger->debug('Jump chain rejected', [
+                'reason' => $chainValidation['reason'],
+                'ship_type' => $shipType,
+            ]);
+            return [
+                'feasible' => false,
+                'error' => 'jump-assisted plan not feasible for current ship/skills',
+                'reason' => $chainValidation['reason'],
+                'effective_jump_range_ly' => $effectiveRange,
+                'jump_cooldown_total_minutes' => null,
+                'jump_fatigue_risk_label' => 'not_applicable',
+                'debug' => $debugEnabled ? ($planResult['debug'] ?? null) : null,
+            ];
         }
 
         foreach ($segments as $segment) {
@@ -281,7 +298,12 @@ final class JumpPlanner
         $npcStationSet = $npcStationIds === [] ? [] : array_fill_keys($npcStationIds, true);
         if (($neighborsBySystem[$startId] ?? []) === []) {
             return [
-                'error' => $this->buildInfeasibleReason('No candidates within range from start.', $avoidFlags, $jumpHighSecRestricted),
+                'error' => $this->buildInfeasibleReason(
+                    'No candidates within range from start.',
+                    $avoidFlags,
+                    $jumpHighSecRestricted,
+                    $options
+                ),
                 'debug' => [
                     'candidate_systems_evaluated' => 0,
                     'edges_built' => 0,
@@ -308,9 +330,14 @@ final class JumpPlanner
             'duration_ms' => round($pathResult['duration_ms'], 2),
             'status' => $pathResult['status'],
         ]);
-        if ($pathResult['path'] === []) {
+        if ($pathResult['path'] === [] || ($pathResult['path'][count($pathResult['path']) - 1] ?? null) !== $endId) {
             return [
-                'error' => $this->buildInfeasibleReason('No valid midpoint chain within jump range.', $avoidFlags, $jumpHighSecRestricted),
+                'error' => $this->buildInfeasibleReason(
+                    'No valid midpoint chain within jump range.',
+                    $avoidFlags,
+                    $jumpHighSecRestricted,
+                    $options
+                ),
                 'debug' => [
                     'nodes_explored' => $pathResult['nodes_explored'] ?? 0,
                     'duration_ms' => round((float) ($pathResult['duration_ms'] ?? 0.0), 2),
@@ -359,9 +386,9 @@ final class JumpPlanner
         $heuristic = function (int $node) use ($systems, $endId): float {
             return $this->heuristic($systems[$node], $systems[$endId]);
         };
-        $allowFn = function (int $node) use ($systems, $options, $jumpHighSecRestricted): bool {
+        $allowFn = function (int $node) use ($systems, $options, $jumpHighSecRestricted, $endId): bool {
             $system = $systems[$node] ?? null;
-            return $system !== null && $this->checkJumpSystemAllowed($system, $options, $jumpHighSecRestricted)['allowed'];
+            return $system !== null && $this->checkJumpNodeAllowed($node, $endId, $system, $options, $jumpHighSecRestricted);
         };
         $costFn = function (int $from, int $to, mixed $edgeData) use ($rangeMeters, $risk, $systems, $npcStationIds, $options): float {
             $distanceLy = (float) ($edgeData ?? 0.0);
@@ -468,12 +495,20 @@ final class JumpPlanner
     /**
      * @return array{allowed: bool, reason: string|null}
      */
-    private function checkJumpSystemAllowed(array $system, array $options, bool $jumpHighSecRestricted): array
+    private function checkJumpEndpointAllowed(array $system, array $options, string $endpoint): array
     {
-        if ($jumpHighSecRestricted && $this->rules->isHighSec($system)) {
+        $shipType = (string) ($options['jump_ship_type'] ?? '');
+        if ($this->rules->isCapitalRestricted($options) && $this->rules->isHighSec($system)) {
             return [
                 'allowed' => false,
-                'reason' => 'Capital ships cannot jump into or out of high-sec systems.',
+                'reason' => 'Rejected systems: capital hulls cannot enter high-sec systems (sec >= 0.5).',
+            ];
+        }
+
+        if ($shipType === 'jump_freighter' && $endpoint === 'start' && $this->rules->isHighSec($system)) {
+            return [
+                'allowed' => false,
+                'reason' => 'Jump freighters cannot initiate jumps from high-sec systems.',
             ];
         }
 
@@ -485,6 +520,115 @@ final class JumpPlanner
         }
 
         return ['allowed' => true, 'reason' => null];
+    }
+
+    private function checkJumpNodeAllowed(
+        int $nodeId,
+        int $endId,
+        array $system,
+        array $options,
+        bool $jumpHighSecRestricted
+    ): bool {
+        if ($this->isJumpFreighter($options) && $this->rules->isHighSec($system)) {
+            return $nodeId === $endId;
+        }
+
+        if ($jumpHighSecRestricted && $this->rules->isHighSec($system)) {
+            return false;
+        }
+
+        return $this->rules->isSystemAllowed($system, $options);
+    }
+
+    private function isJumpFreighter(array $options): bool
+    {
+        return ($options['jump_ship_type'] ?? '') === 'jump_freighter';
+    }
+
+    /**
+     * @return array{valid: bool, reason: string|null}
+     */
+    private function validateChain(array $segments, array $systems, array $options): array
+    {
+        if ($segments === []) {
+            return ['valid' => true, 'reason' => null];
+        }
+
+        $shipType = (string) ($options['jump_ship_type'] ?? '');
+        $isCapital = $this->rules->isCapitalRestricted($options);
+        $isJumpFreighter = $shipType === 'jump_freighter';
+        $lastIndex = count($segments) - 1;
+
+        foreach ($segments as $index => $segment) {
+            $from = $systems[$segment['from_id']] ?? null;
+            $to = $systems[$segment['to_id']] ?? null;
+            if ($from === null || $to === null) {
+                continue;
+            }
+
+            $fromHigh = $this->rules->getSystemSpaceType($from) === 'highsec';
+            $toHigh = $this->rules->getSystemSpaceType($to) === 'highsec';
+
+            if ($isCapital && ($fromHigh || $toHigh)) {
+                if ($index === 0 && $fromHigh) {
+                    $label = 'launch';
+                    $systemName = $from['name'];
+                } elseif ($index === $lastIndex && $toHigh) {
+                    $label = 'landing';
+                    $systemName = $to['name'];
+                } elseif ($toHigh) {
+                    $label = 'midpoint';
+                    $systemName = $to['name'];
+                } else {
+                    $label = 'midpoint';
+                    $systemName = $from['name'];
+                }
+                return [
+                    'valid' => false,
+                    'reason' => sprintf(
+                        'Jump chain invalid: %s %s is high-sec and not allowed for %s.',
+                        $label,
+                        $systemName,
+                        $shipType === '' ? 'capital ship' : $shipType
+                    ),
+                ];
+            }
+
+            if ($isJumpFreighter) {
+                if ($index === 0 && $fromHigh) {
+                    return [
+                        'valid' => false,
+                        'reason' => sprintf(
+                            'Jump chain invalid: launch %s is high-sec and not allowed for jump freighter.',
+                            $from['name']
+                        ),
+                    ];
+                }
+
+                if ($index < $lastIndex && $toHigh) {
+                    return [
+                        'valid' => false,
+                        'reason' => sprintf(
+                            'Jump chain invalid: midpoint %s is high-sec and not allowed for jump freighter.',
+                            $to['name']
+                        ),
+                    ];
+                }
+
+                if ($fromHigh && $toHigh) {
+                    return [
+                        'valid' => false,
+                        'reason' => sprintf(
+                            'Jump chain invalid: jump from %s to %s is high-sec to high-sec and not allowed for jump freighter.',
+                            $from['name'],
+                            $to['name']
+                        ),
+                    ];
+                }
+            }
+        }
+
+        return ['valid' => true, 'reason' => null];
     }
 
     private function segmentPayload(int $from, int $to, array $systems): array
@@ -535,8 +679,22 @@ final class JumpPlanner
         ];
     }
 
-    private function buildInfeasibleReason(string $base, array $avoidFlags, bool $jumpHighSecRestricted): string
+    private function buildInfeasibleReason(
+        string $base,
+        array $avoidFlags,
+        bool $jumpHighSecRestricted,
+        array $options
+    ): string
     {
+        if (
+            $jumpHighSecRestricted
+            && $this->rules->isCapitalRestricted($options)
+            && !$avoidFlags['avoid_lowsec']
+            && !$avoidFlags['avoid_nullsec']
+        ) {
+            return 'Rejected systems: capital hulls cannot enter high-sec systems (sec >= 0.5).';
+        }
+
         $details = [];
         if ($avoidFlags['avoid_lowsec']) {
             $details[] = 'avoid_lowsec enabled';

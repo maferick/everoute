@@ -578,8 +578,10 @@ final class RouteService
         $avoidNull = $options['avoid_nullsec'] ?? false;
         $avoidSystems = $options['avoid_systems'] ?? [];
         $avoidSet = array_fill_keys($avoidSystems, true);
-        $jumpHighSecRestricted = $this->rules->isCapitalRestricted($options)
-            || (($options['jump_ship_type'] ?? '') === 'jump_freighter');
+        $jumpShipType = (string) ($options['jump_ship_type'] ?? '');
+        $isCapitalRestricted = $this->rules->isCapitalRestricted($options);
+        $isJumpFreighter = $jumpShipType === 'jump_freighter';
+        $jumpHighSecRestricted = $isCapitalRestricted || $isJumpFreighter;
 
         $maxLaunch = \Everoute\Config\Env::int('HYBRID_LAUNCH_MAX_GATES', 6);
         $maxLanding = \Everoute\Config\Env::int('HYBRID_LANDING_MAX_GATES', 6);
@@ -588,8 +590,8 @@ final class RouteService
         $landingCandidates = $this->findGateCandidates($endId, $maxLanding, $options, $avoidLow, $avoidNull, $avoidSet, true);
         $landingCandidates[$endId] = ['hops' => 0, 'used_regional_gate' => false];
 
-        $launchList = $this->selectHybridCandidates($launchCandidates, $endId, $jumpHighSecRestricted, true);
-        $landingList = $this->selectHybridCandidates($landingCandidates, $endId, $jumpHighSecRestricted, false);
+        $launchList = $this->selectHybridCandidates($launchCandidates, $endId, $jumpHighSecRestricted, true, $jumpShipType);
+        $landingList = $this->selectHybridCandidates($landingCandidates, $endId, $jumpHighSecRestricted, false, $jumpShipType);
 
         if ($launchList === []) {
             return [
@@ -638,7 +640,7 @@ final class RouteService
                     continue;
                 }
 
-                if ($jumpHighSecRestricted && $this->rules->isHighSec($landingSystem)) {
+                if ($isCapitalRestricted && $this->rules->isHighSec($landingSystem)) {
                     continue;
                 }
 
@@ -1033,7 +1035,13 @@ final class RouteService
      * @param array<int, array{hops:int,used_regional_gate:bool}> $candidates
      * @return array<int, array{id:int,score:float,distance_to_target_ly:float,risk_score:int,hops:int}>
      */
-    private function selectHybridCandidates(array $candidates, int $targetId, bool $jumpHighSecRestricted, bool $isLaunch): array
+    private function selectHybridCandidates(
+        array $candidates,
+        int $targetId,
+        bool $jumpHighSecRestricted,
+        bool $isLaunch,
+        string $jumpShipType
+    ): array
     {
         if ($candidates === []) {
             return [];
@@ -1055,7 +1063,11 @@ final class RouteService
                 continue;
             }
             if ($jumpHighSecRestricted && $this->rules->isHighSec($system)) {
-                continue;
+                if ($jumpShipType === 'jump_freighter' && !$isLaunch && $systemId === $targetId) {
+                    // Allow high-sec only as the final landing candidate for jump freighters.
+                } else {
+                    continue;
+                }
             }
             $distanceLy = $this->distanceLy($system, $target);
             $riskScore = (int) (($this->risk[$systemId]['kills_last_24h'] ?? 0) + ($this->risk[$systemId]['pod_kills_last_24h'] ?? 0));
