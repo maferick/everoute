@@ -23,6 +23,8 @@ final class RouteService
         private StationRepository $stationsRepo,
         private RiskRepository $riskRepo,
         private WeightCalculator $calculator,
+        private MovementRules $rules,
+        private JumpPlanner $jumpPlanner,
         private Logger $logger
     ) {
         $this->loadData();
@@ -40,6 +42,11 @@ final class RouteService
 
         if ($start === null || $end === null) {
             return ['error' => 'Unknown system'];
+        }
+
+        $validation = $this->rules->validateEndpoints($start, $end, $options);
+        if ($validation !== null) {
+            return $validation;
         }
 
         $profiles = [
@@ -89,6 +96,10 @@ final class RouteService
                 return INF;
             }
 
+            if (!$this->rules->isSystemAllowed($system, $options)) {
+                return INF;
+            }
+
             $security = (float) ($system['security'] ?? 0);
             if ($avoidNull && $security < 0.1) {
                 return INF;
@@ -119,10 +130,41 @@ final class RouteService
 
         $summary = $this->summarizeRoute($pathResult['path'], $options);
         $why = $this->explainRoute($pathResult['path'], $startId, $endId, $options);
+        $rules = [
+            'constraints' => $this->rules->rejectionReasons($options),
+        ];
+
+        $plans = [];
+        if (($options['mode'] ?? '') === 'capital') {
+            $plans['gate'] = [
+                'estimated_time_s' => $summary['travel_time_proxy'],
+                'risk_score' => $summary['risk_score'],
+                'exposure_score' => $summary['exposure_score'],
+                'total_jumps' => $summary['total_jumps'],
+            ];
+            $npcStations = $this->stationsRepo->listNpcStationsBySystems($pathResult['path']);
+            $npcStationIds = array_keys($npcStations);
+            $jumpPlan = $this->jumpPlanner->plan(
+                $startId,
+                $endId,
+                $this->systems,
+                $this->risk,
+                $options,
+                $npcStationIds,
+                $pathResult['path']
+            );
+            $plans['jump'] = $jumpPlan;
+            $rules['jump'] = [
+                'cooldown_minutes_estimate' => $jumpPlan['cooldown_minutes_estimate'] ?? null,
+                'fatigue_risk' => $jumpPlan['fatigue_risk'] ?? null,
+            ];
+        }
 
         return array_merge($summary, [
             'why' => $why,
             'midpoints' => $this->suggestMidpoints($pathResult['path']),
+            'rules' => $rules,
+            'plans' => $plans,
         ]);
     }
 

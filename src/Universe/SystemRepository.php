@@ -28,7 +28,7 @@ final class SystemRepository
 
     public function listAll(): array
     {
-        $stmt = $this->connection->pdo()->query('SELECT id, name, security, system_size_au FROM systems ORDER BY name');
+        $stmt = $this->connection->pdo()->query('SELECT id, name, security, system_size_au, x, y, z FROM systems ORDER BY name');
         return $stmt->fetchAll();
     }
 

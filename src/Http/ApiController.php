@@ -47,15 +47,29 @@ final class ApiController
             'freighter',
             'capital',
             'jump_freighter',
+            'super',
+            'titan',
         ], 'subcap');
 
         $safety = $this->validator->int($body['safety_vs_speed'] ?? null, 0, 100, $mode === 'capital' ? 70 : 50);
+
+        $jumpShipType = $this->validator->enum((string) ($body['jump_ship_type'] ?? ''), [
+            'carrier',
+            'dread',
+            'fax',
+            'jump_freighter',
+            'supercarrier',
+            'titan',
+        ], $shipClass === 'jump_freighter' ? 'jump_freighter' : 'carrier');
+        $jumpSkillLevel = $this->validator->int($body['jump_skill_level'] ?? null, 0, 5, 4);
 
         $options = [
             'from' => $from,
             'to' => $to,
             'mode' => $mode,
             'ship_class' => $shipClass,
+            'jump_ship_type' => $jumpShipType,
+            'jump_skill_level' => $jumpSkillLevel,
             'safety_vs_speed' => $safety,
             'avoid_lowsec' => $this->validator->bool($body['avoid_lowsec'] ?? null, false),
             'avoid_nullsec' => $this->validator->bool($body['avoid_nullsec'] ?? null, false),
@@ -66,7 +80,8 @@ final class ApiController
 
         $result = $this->routes->computeRoutes($options);
         if (isset($result['error'])) {
-            return new JsonResponse($result, 404);
+            $status = $result['error'] === 'not_feasible' ? 422 : 404;
+            return new JsonResponse($result, $status);
         }
 
         return new JsonResponse($result);

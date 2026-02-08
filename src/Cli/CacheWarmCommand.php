@@ -6,6 +6,9 @@ namespace Everoute\Cli;
 
 use Everoute\DB\Connection;
 use Everoute\Risk\RiskRepository;
+use Everoute\Routing\JumpPlanner;
+use Everoute\Routing\JumpRangeCalculator;
+use Everoute\Routing\MovementRules;
 use Everoute\Routing\RouteService;
 use Everoute\Routing\WeightCalculator;
 use Everoute\Security\Logger;
@@ -37,7 +40,9 @@ final class CacheWarmCommand extends Command
             new StargateRepository($connection),
             new StationRepository($connection),
             new RiskRepository($connection),
-            new WeightCalculator(),
+            $weightCalculator = new WeightCalculator(),
+            $movementRules = new MovementRules(),
+            new JumpPlanner(new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php'), $weightCalculator, $movementRules),
             new Logger()
         );
         $service->refresh();

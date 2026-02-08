@@ -10,6 +10,9 @@ use Everoute\Http\Request;
 use Everoute\Http\Response;
 use Everoute\Http\Router;
 use Everoute\Risk\RiskRepository;
+use Everoute\Routing\JumpPlanner;
+use Everoute\Routing\JumpRangeCalculator;
+use Everoute\Routing\MovementRules;
 use Everoute\Routing\RouteService;
 use Everoute\Routing\WeightCalculator;
 use Everoute\Security\Csrf;
@@ -43,12 +46,19 @@ $stargates = new StargateRepository($connection);
 $stations = new StationRepository($connection);
 $riskRepo = new RiskRepository($connection);
 
+$weightCalculator = new WeightCalculator();
+$movementRules = new MovementRules();
+$jumpRanges = new JumpRangeCalculator(__DIR__ . '/../config/jump_ranges.php');
+$jumpPlanner = new JumpPlanner($jumpRanges, $weightCalculator, $movementRules);
+
 $routeService = new RouteService(
     $systems,
     $stargates,
     $stations,
     $riskRepo,
-    new WeightCalculator(),
+    $weightCalculator,
+    $movementRules,
+    $jumpPlanner,
     $logger
 );
 
@@ -83,6 +93,8 @@ if ($request->method === 'POST') {
         'to' => $_POST['to'] ?? '',
         'mode' => $_POST['mode'] ?? 'subcap',
         'ship_class' => $_POST['ship_class'] ?? 'subcap',
+        'jump_ship_type' => $_POST['jump_ship_type'] ?? '',
+        'jump_skill_level' => $_POST['jump_skill_level'] ?? '',
         'safety_vs_speed' => (int) ($_POST['safety_vs_speed'] ?? 50),
         'avoid_lowsec' => !empty($_POST['avoid_lowsec']),
         'avoid_nullsec' => !empty($_POST['avoid_nullsec']),
