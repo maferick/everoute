@@ -18,6 +18,8 @@ final class GraphStore
     private static ?Graph $graph = null;
     /** @var array<int, array<int, array{to: int, is_regional_gate: bool}>> */
     private static array $adjacency = [];
+    /** @var array<int, int[]> */
+    private static array $gateNeighbors = [];
     /** @var array<int, array<int, array{to: int, is_regional_gate: bool}>> */
     private static array $reverseAdjacency = [];
 
@@ -37,6 +39,7 @@ final class GraphStore
 
         self::$graph = new Graph();
         self::$adjacency = [];
+        self::$gateNeighbors = [];
         self::$reverseAdjacency = [];
         foreach ($stargatesRepo->allEdges() as $edge) {
             $from = (int) $edge['from_system_id'];
@@ -44,6 +47,7 @@ final class GraphStore
             $isRegional = !empty($edge['is_regional_gate']);
             self::$graph->addEdge($from, $to);
             self::$adjacency[$from][] = ['to' => $to, 'is_regional_gate' => $isRegional];
+            self::$gateNeighbors[$from][] = $to;
             self::$reverseAdjacency[$to][] = ['to' => $from, 'is_regional_gate' => $isRegional];
         }
 
@@ -96,6 +100,12 @@ final class GraphStore
     public static function adjacency(): array
     {
         return self::$adjacency;
+    }
+
+    /** @return array<int, int[]> */
+    public static function gateNeighbors(): array
+    {
+        return self::$gateNeighbors;
     }
 
     /** @return array<int, array<int, array{to: int, is_regional_gate: bool}>> */
