@@ -14,6 +14,8 @@ use Everoute\Routing\MovementRules;
 use Everoute\Routing\RouteService;
 use Everoute\Routing\WeightCalculator;
 use Everoute\Security\Logger;
+use Everoute\Universe\GateDistanceRepository;
+use Everoute\Universe\JumpNeighborRepository;
 use Everoute\Universe\StargateRepository;
 use Everoute\Universe\SystemRepository;
 use Symfony\Component\Console\Command\Command;
@@ -46,11 +48,12 @@ final class CacheWarmCommand extends Command
             new RiskRepository($connection, $riskCache, $riskCacheTtl, $heatmapTtl),
             $weightCalculator = new WeightCalculator(),
             $movementRules = new MovementRules(),
-            new JumpPlanner(new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php'), $weightCalculator, $movementRules, new JumpFatigueModel(), new Logger()),
+            new JumpPlanner(new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php'), $weightCalculator, $movementRules, new JumpFatigueModel(), new Logger(), new JumpNeighborRepository($connection)),
             new Logger(),
             $riskCache,
             $routeCacheTtl,
-            $riskCacheTtl
+            $riskCacheTtl,
+            new GateDistanceRepository($connection)
         );
         $service->refresh();
         $output->writeln('<info>Cache warmed.</info>');

@@ -1,5 +1,8 @@
 DROP TABLE IF EXISTS risk_import_jobs;
 DROP TABLE IF EXISTS route_cache;
+DROP TABLE IF EXISTS precompute_checkpoints;
+DROP TABLE IF EXISTS jump_neighbors;
+DROP TABLE IF EXISTS gate_distances;
 DROP TABLE IF EXISTS chokepoints;
 DROP TABLE IF EXISTS kill_events;
 DROP TABLE IF EXISTS system_risk;

@@ -6,6 +6,7 @@ namespace Everoute\Routing;
 
 use Everoute\Config\Env;
 use Everoute\Security\Logger;
+use Everoute\Universe\JumpNeighborRepository;
 
 final class JumpPlanner
 {
@@ -16,14 +17,17 @@ final class JumpPlanner
     private array $jumpNeighbors = [];
     /** @var float[] */
     private array $jumpRangeBuckets = [];
+    private JumpNeighborGraphBuilder $neighborBuilder;
 
     public function __construct(
         private JumpRangeCalculator $rangeCalculator,
         private WeightCalculator $calculator,
         private MovementRules $rules,
         private JumpFatigueModel $fatigueModel,
-        private Logger $logger
+        private Logger $logger,
+        private ?JumpNeighborRepository $jumpNeighborRepo = null
     ) {
+        $this->neighborBuilder = new JumpNeighborGraphBuilder();
     }
 
     public function preloadJumpGraphs(array $systems): void
@@ -33,12 +37,26 @@ final class JumpPlanner
         }
 
         $this->jumpRangeBuckets = $this->rangeCalculator->rangeBuckets();
+        $systemCount = count($systems);
         foreach ($this->jumpRangeBuckets as $rangeLy) {
+            $neighbors = null;
+            if ($this->jumpNeighborRepo !== null) {
+                $neighbors = $this->jumpNeighborRepo->loadRangeBucket((int) $rangeLy, $systemCount);
+                if ($neighbors !== null) {
+                    $this->jumpNeighbors[$rangeLy] = $neighbors;
+                    $this->logger->info('Loaded precomputed jump neighbors', [
+                        'range_ly' => $rangeLy,
+                        'systems' => $systemCount,
+                    ]);
+                    continue;
+                }
+            }
+
             $rangeMeters = $rangeLy * JumpMath::METERS_PER_LY;
-            $bucketIndex = $this->buildSpatialBuckets($systems, $rangeMeters);
+            $bucketIndex = $this->neighborBuilder->buildSpatialBuckets($systems, $rangeMeters);
             $neighbors = [];
             foreach ($systems as $id => $system) {
-                $neighbors[$id] = $this->buildJumpNeighborsForSystem($system, $systems, $bucketIndex, $rangeMeters);
+                $neighbors[$id] = $this->neighborBuilder->buildNeighborsForSystem($system, $systems, $bucketIndex, $rangeMeters);
             }
             $this->jumpNeighbors[$rangeLy] = $neighbors;
         }
@@ -413,69 +431,6 @@ final class JumpPlanner
         $allowed[$endId] = true;
 
         return $allowed;
-    }
-
-    private function buildSpatialBuckets(array $systems, float $rangeMeters): array
-    {
-        $bucketSize = max(1.0, $rangeMeters);
-        $buckets = [];
-        foreach ($systems as $id => $system) {
-            $bucketKey = $this->bucketKey($system, $bucketSize);
-            $buckets[$bucketKey][] = (int) $id;
-        }
-
-        return [
-            'size' => $bucketSize,
-            'buckets' => $buckets,
-        ];
-    }
-
-    private function bucketKey(array $system, float $bucketSize): string
-    {
-        $bx = (int) floor(((float) $system['x']) / $bucketSize);
-        $by = (int) floor(((float) $system['y']) / $bucketSize);
-        $bz = (int) floor(((float) $system['z']) / $bucketSize);
-        return $bx . ':' . $by . ':' . $bz;
-    }
-
-    /** @return array<int, float> */
-    private function buildJumpNeighborsForSystem(array $system, array $systems, array $bucketIndex, float $rangeMeters): array
-    {
-        $bucketSize = $bucketIndex['size'];
-        $bx = (int) floor(((float) $system['x']) / $bucketSize);
-        $by = (int) floor(((float) $system['y']) / $bucketSize);
-        $bz = (int) floor(((float) $system['z']) / $bucketSize);
-        $neighbors = [];
-
-        for ($dx = -1; $dx <= 1; $dx++) {
-            for ($dy = -1; $dy <= 1; $dy++) {
-                for ($dz = -1; $dz <= 1; $dz++) {
-                    $key = ($bx + $dx) . ':' . ($by + $dy) . ':' . ($bz + $dz);
-                    foreach ($bucketIndex['buckets'][$key] ?? [] as $candidateId) {
-                        if ($candidateId === (int) $system['id']) {
-                            continue;
-                        }
-                        $candidate = $systems[$candidateId] ?? null;
-                        if ($candidate === null) {
-                            continue;
-                        }
-                        if (
-                            abs(((float) $system['x']) - (float) $candidate['x']) > $rangeMeters
-                            || abs(((float) $system['y']) - (float) $candidate['y']) > $rangeMeters
-                            || abs(((float) $system['z']) - (float) $candidate['z']) > $rangeMeters
-                        ) {
-                            continue;
-                        }
-                        $distanceMeters = JumpMath::distanceMeters($system, $candidate);
-                        if ($distanceMeters <= $rangeMeters) {
-                            $neighbors[$candidateId] = $distanceMeters / JumpMath::METERS_PER_LY;
-                        }
-                    }
-                }
-            }
-        }
-
-        return $neighbors;
     }
 
     /**
