@@ -22,7 +22,7 @@ final class MovementRules
             return false;
         }
 
-        return in_array($jumpShipType, ['carrier', 'dread', 'fax', 'supercarrier', 'titan'], true);
+        return in_array($jumpShipType, ['carrier', 'dread', 'fax', 'super', 'supercarrier', 'titan'], true);
     }
 
     public function isHighSec(array $system): bool
@@ -65,6 +65,20 @@ final class MovementRules
     {
         if ($this->isCapitalRestricted($options) && $this->isHighSec($system)) {
             return false;
+        }
+
+        return true;
+    }
+
+    public function isSystemAllowedForShip(array $system, string $shipType): bool
+    {
+        $shipType = strtolower($shipType);
+        if (in_array($shipType, ['carrier', 'dread', 'fax', 'super', 'supercarrier', 'titan'], true)) {
+            return $this->getSystemSpaceType($system) !== 'highsec';
+        }
+
+        if ($shipType === 'jump_freighter') {
+            return $this->getSystemSpaceType($system) !== 'highsec';
         }
 
         return true;

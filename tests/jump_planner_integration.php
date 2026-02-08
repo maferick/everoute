@@ -51,7 +51,7 @@ foreach ($systemsRepo->listForRouting() as $system) {
 }
 
 $planner = new JumpPlanner(
-    new JumpRangeCalculator(__DIR__ . '/../config/jump_ranges.php'),
+    new JumpRangeCalculator(__DIR__ . '/../config/ships.php', __DIR__ . '/../config/jump_ranges.php'),
     new WeightCalculator(),
     new MovementRules(),
     new JumpFatigueModel(),

@@ -51,7 +51,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
         }
         $rangeBucketColumn = $this->resolveRangeBucketColumn($pdo);
         $checkpointRepo = new PrecomputeCheckpointRepository($connection);
-        $rangeCalculator = new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php');
+        $rangeCalculator = new JumpRangeCalculator(__DIR__ . '/../../config/ships.php', __DIR__ . '/../../config/jump_ranges.php');
         $ranges = $this->parseRanges($rangeOption, $rangeCalculator->rangeBuckets());
         $neighborCap = $rangeCalculator->neighborCapPerSystem();
         $storageWarningBytes = $rangeCalculator->neighborStorageWarningBytes();

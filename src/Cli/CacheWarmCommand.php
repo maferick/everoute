@@ -48,7 +48,7 @@ final class CacheWarmCommand extends Command
             new RiskRepository($connection, $riskCache, $riskCacheTtl, $heatmapTtl),
             $weightCalculator = new WeightCalculator(),
             $movementRules = new MovementRules(),
-            new JumpPlanner(new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php'), $weightCalculator, $movementRules, new JumpFatigueModel(), new Logger(), new JumpNeighborRepository($connection)),
+            new JumpPlanner(new JumpRangeCalculator(__DIR__ . '/../../config/ships.php', __DIR__ . '/../../config/jump_ranges.php'), $weightCalculator, $movementRules, new JumpFatigueModel(), new Logger(), new JumpNeighborRepository($connection)),
             new Logger(),
             $riskCache,
             $routeCacheTtl,

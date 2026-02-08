@@ -52,7 +52,7 @@ function buildPlannerAndSystems(array $systemsData): array
     }
 
     $planner = new JumpPlanner(
-        new JumpRangeCalculator(__DIR__ . '/../config/jump_ranges.php'),
+        new JumpRangeCalculator(__DIR__ . '/../config/ships.php', __DIR__ . '/../config/jump_ranges.php'),
         new WeightCalculator(),
         new MovementRules(),
         new JumpFatigueModel(),
@@ -86,9 +86,25 @@ $jumpFreighterOptions = [
 
 [$planner, $systems] = buildPlannerAndSystems([
     [1, 'Start', 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [2, 'MidHigh', 0.6, 1, 0, 0, 1.0, 7 * $metersPerLy, 0.0, 0.0],
-    [3, 'MidLow', 0.2, 1, 0, 0, 1.0, 7.1 * $metersPerLy, 0.0, 0.0],
-    [4, 'End', 0.2, 1, 0, 0, 1.0, 14.2 * $metersPerLy, 0.0, 0.0],
+    [2, 'MidSafe', 0.2, 1, 0, 0, 1.0, 6.9 * $metersPerLy, 0.0, 0.0],
+    [3, 'End', 0.2, 1, 0, 0, 1.0, 13.8 * $metersPerLy, 0.0, 0.0],
+]);
+
+$plan = $planner->plan(1, 3, $systems, [], $carrierOptions, [], []);
+if (empty($plan['feasible'])) {
+    throw new RuntimeException('Expected carrier jump chain to be feasible.');
+}
+foreach ($plan['segments'] ?? [] as $segment) {
+    if (($segment['distance_ly'] ?? 0.0) > 7.0) {
+        throw new RuntimeException('Expected carrier jump segments to stay within 7 LY.');
+    }
+}
+
+[$planner, $systems] = buildPlannerAndSystems([
+    [1, 'Start', 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [2, 'MidHigh', 0.6, 1, 0, 0, 1.0, 6.5 * $metersPerLy, 0.0, 0.0],
+    [3, 'MidLow', 0.2, 1, 0, 0, 1.0, 6.8 * $metersPerLy, 0.0, 0.0],
+    [4, 'End', 0.2, 1, 0, 0, 1.0, 13.6 * $metersPerLy, 0.0, 0.0],
 ]);
 
 $plan = $planner->plan(1, 4, $systems, [], $carrierOptions, [], []);
@@ -123,8 +139,8 @@ $plan = $planner->plan(1, 3, $systems, [], $carrierOptions, [], []);
 if (!empty($plan['feasible'])) {
     throw new RuntimeException('Expected carrier plan to be rejected when midpoint is high-sec.');
 }
-if (strpos((string) ($plan['reason'] ?? ''), 'Rejected systems: capital hulls cannot enter high-sec systems (sec >= 0.5).') === false) {
-    throw new RuntimeException('Expected high-sec rejection reason for carrier plan.');
+if (($plan['reason'] ?? '') !== 'No valid jump chain within ship range.') {
+    throw new RuntimeException('Expected range-based rejection reason for carrier plan.');
 }
 
 echo "Jump planner space rules test passed.\n";
