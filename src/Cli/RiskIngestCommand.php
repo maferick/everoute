@@ -11,6 +11,7 @@ use Everoute\Risk\ZkillRedisQClient;
 use Everoute\Security\Logger;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 final class RiskIngestCommand extends Command
@@ -23,7 +24,8 @@ final class RiskIngestCommand extends Command
     {
         $this
             ->setName(self::$defaultName)
-            ->setDescription('Ingest zKillboard RedisQ killmails and update risk aggregates');
+            ->setDescription('Ingest zKillboard RedisQ killmails and update risk aggregates')
+            ->addOption('seconds', null, InputOption::VALUE_REQUIRED, 'Maximum runtime in seconds', '55');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -56,6 +58,8 @@ final class RiskIngestCommand extends Command
         $processed = 0;
         $lastKillTime = null;
         $lastPollAt = null;
+        $startedAt = microtime(true);
+        $maxSeconds = max(1, (int) $input->getOption('seconds'));
 
         $logger->info('risk_ingest_started', [
             'queue_id' => $queueId,
@@ -64,6 +68,10 @@ final class RiskIngestCommand extends Command
         ]);
 
         while (true) {
+            if ((microtime(true) - $startedAt) >= $maxSeconds) {
+                $output->writeln(sprintf('<info>Ingest complete. Processed %d killmails.</info>', $processed));
+                return Command::SUCCESS;
+            }
             if ($backoff > 0) {
                 $logger->warning('risk_ingest_backoff', ['seconds' => $backoff]);
                 sleep($backoff);

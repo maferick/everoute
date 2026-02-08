@@ -44,14 +44,14 @@ final class SdeImporter
                 $pdo,
                 'systems',
                 'systems_stage',
-                ['id', 'name', 'security', 'region_id', 'constellation_id', 'x', 'y', 'z', 'system_size_au', 'updated_at']
+                ['id', 'name', 'security', 'region_id', 'constellation_id', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at']
             );
-        $this->insertFromStage(
-            $pdo,
-            'stargates',
-            'stargates_stage',
-            ['id', 'from_system_id', 'to_system_id', 'updated_at']
-        );
+            $this->insertFromStage(
+                $pdo,
+                'stargates',
+                'stargates_stage',
+                ['id', 'from_system_id', 'to_system_id', 'updated_at']
+            );
             $this->insertFromStage(
                 $pdo,
                 'stations',
@@ -80,6 +80,8 @@ final class SdeImporter
             security DECIMAL(4,2) NOT NULL,
             region_id BIGINT NULL,
             constellation_id BIGINT NULL,
+            has_npc_station TINYINT(1) NOT NULL DEFAULT 0,
+            npc_station_count INT NOT NULL DEFAULT 0,
             x DOUBLE NOT NULL DEFAULT 0,
             y DOUBLE NOT NULL DEFAULT 0,
             z DOUBLE NOT NULL DEFAULT 0,
@@ -115,6 +117,8 @@ final class SdeImporter
             security DECIMAL(4,2) NOT NULL,
             region_id BIGINT NULL,
             constellation_id BIGINT NULL,
+            has_npc_station TINYINT(1) NOT NULL DEFAULT 0,
+            npc_station_count INT NOT NULL DEFAULT 0,
             x DOUBLE NOT NULL DEFAULT 0,
             y DOUBLE NOT NULL DEFAULT 0,
             z DOUBLE NOT NULL DEFAULT 0,
@@ -162,6 +166,8 @@ final class SdeImporter
         $this->ensureStationColumn($pdo, 'updated_at', 'DATETIME NOT NULL');
         $this->ensureStargateColumn($pdo, 'is_regional_gate', 'TINYINT(1) NOT NULL DEFAULT 0');
         $this->ensureStargateIndex($pdo, 'idx_regional_gate', 'is_regional_gate');
+        $this->ensureSystemColumn($pdo, 'has_npc_station', 'TINYINT(1) NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'npc_station_count', 'INT NOT NULL DEFAULT 0');
     }
 
     private function ensureStationTypeColumn(PDO $pdo): void
@@ -207,6 +213,13 @@ final class SdeImporter
         $pdo->exec(sprintf('CREATE INDEX %s ON stargates (%s)', $index, $column));
     }
 
+    private function ensureSystemColumn(PDO $pdo, string $column, string $definition): void
+    {
+        if (!$this->tableHasColumn($pdo, 'systems', $column)) {
+            $pdo->exec(sprintf('ALTER TABLE systems ADD COLUMN %s %s', $column, $definition));
+        }
+    }
+
     private function loadSystems(PDO $pdo, string $path, string $now, ?callable $progress): void
     {
         $this->report($progress, '<info>Importing systems...</info>');
@@ -224,7 +237,7 @@ final class SdeImporter
                 $this->insertBatch(
                     $pdo,
                     'systems_stage',
-                    ['id', 'name', 'security', 'region_id', 'constellation_id', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
+                    ['id', 'name', 'security', 'region_id', 'constellation_id', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
                     $batch
                 );
                 $batch = [];
@@ -236,7 +249,7 @@ final class SdeImporter
             $this->insertBatch(
                 $pdo,
                 'systems_stage',
-                ['id', 'name', 'security', 'region_id', 'constellation_id', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
+                ['id', 'name', 'security', 'region_id', 'constellation_id', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
                 $batch
             );
         }
@@ -516,6 +529,8 @@ final class SdeImporter
             'security' => $security,
             'region_id' => $regionId !== null ? (int) $regionId : null,
             'constellation_id' => $constellationId !== null ? (int) $constellationId : null,
+            'has_npc_station' => 0,
+            'npc_station_count' => 0,
             'x' => $x,
             'y' => $y,
             'z' => $z,

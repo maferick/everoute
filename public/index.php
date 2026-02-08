@@ -22,7 +22,6 @@ use Everoute\Security\Logger;
 use Everoute\Security\RateLimiter;
 use Everoute\Security\Validator;
 use Everoute\Universe\StargateRepository;
-use Everoute\Universe\StationRepository;
 use Everoute\Universe\SystemRepository;
 
 require_once __DIR__ . '/../vendor/autoload.php';
@@ -45,11 +44,12 @@ $connection = new Connection($dsn, Env::get('DB_USER', ''), Env::get('DB_PASS', 
 
 $riskCache = RedisCache::fromEnv();
 $riskCacheTtl = Env::int('RISK_CACHE_TTL_SECONDS', 60);
+$heatmapTtl = Env::int('RISK_HEATMAP_TTL_SECONDS', 30);
+$routeCacheTtl = Env::int('ROUTE_CACHE_TTL_SECONDS', 600);
 
 $systems = new SystemRepository($connection);
 $stargates = new StargateRepository($connection);
-$stations = new StationRepository($connection);
-$riskRepo = new RiskRepository($connection, $riskCache, $riskCacheTtl);
+$riskRepo = new RiskRepository($connection, $riskCache, $riskCacheTtl, $heatmapTtl);
 
 $weightCalculator = new WeightCalculator();
 $movementRules = new MovementRules();
@@ -59,12 +59,14 @@ $jumpPlanner = new JumpPlanner($jumpRanges, $weightCalculator, $movementRules, n
 $routeService = new RouteService(
     $systems,
     $stargates,
-    $stations,
     $riskRepo,
     $weightCalculator,
     $movementRules,
     $jumpPlanner,
-    $logger
+    $logger,
+    $riskCache,
+    $routeCacheTtl,
+    $riskCacheTtl
 );
 
 $validator = new Validator();

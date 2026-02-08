@@ -4,14 +4,17 @@ declare(strict_types=1);
 
 namespace Everoute\Routing;
 
+use Everoute\Cache\RedisCache;
 use Everoute\Risk\RiskRepository;
 use Everoute\Security\Logger;
 use Everoute\Universe\StargateRepository;
-use Everoute\Universe\StationRepository;
 use Everoute\Universe\SystemRepository;
 
 final class RouteService
 {
+    private static ?array $riskCache = null;
+    private static int $riskCacheLoadedAt = 0;
+    private static ?array $chokepointsCache = null;
     private array $systems = [];
     private array $risk = [];
     private array $chokepoints = [];
@@ -22,28 +25,39 @@ final class RouteService
     public function __construct(
         private SystemRepository $systemsRepo,
         private StargateRepository $stargatesRepo,
-        private StationRepository $stationsRepo,
         private RiskRepository $riskRepo,
         private WeightCalculator $calculator,
         private MovementRules $rules,
         private JumpPlanner $jumpPlanner,
-        private Logger $logger
+        private Logger $logger,
+        private ?RedisCache $cache = null,
+        private int $routeCacheTtlSeconds = 600,
+        private int $riskCacheTtlSeconds = 60
     ) {
         $this->loadData();
     }
 
     public function refresh(): void
     {
+        GraphStore::refresh($this->systemsRepo, $this->stargatesRepo, $this->logger);
         $this->loadData();
     }
 
     public function computeRoutes(array $options): array
     {
-        $start = $this->systemsRepo->findByNameOrId($options['from']);
-        $end = $this->systemsRepo->findByNameOrId($options['to']);
+        $start = GraphStore::systemByNameOrId($options['from']);
+        $end = GraphStore::systemByNameOrId($options['to']);
 
         if ($start === null || $end === null) {
             return ['error' => 'Unknown system'];
+        }
+
+        $cacheKey = $this->routeCacheKey((int) $start['id'], (int) $end['id'], $options);
+        if ($this->cache) {
+            $cached = $this->cache->getJson($cacheKey);
+            if (is_array($cached)) {
+                return $cached;
+            }
         }
 
         $validation = $this->rules->validateEndpoints($start, $end, $options);
@@ -63,12 +77,18 @@ final class RouteService
             $results[$key] = $result;
         }
 
-        return [
+        $payload = [
             'from' => $start,
             'to' => $end,
             'routes' => $results,
             'risk_updated_at' => $this->riskRepo->getLatestUpdate(),
         ];
+
+        if ($this->cache) {
+            $this->cache->setJson($cacheKey, $payload, $this->routeCacheTtlSeconds);
+        }
+
+        return $payload;
     }
 
     private function profileWeights(int $safety): array
@@ -115,8 +135,7 @@ final class RouteService
                 'exposure_score' => $summary['exposure_score'],
                 'total_jumps' => $summary['total_jumps'],
             ];
-            $npcStations = $this->stationsRepo->listNpcStationsBySystems($pathResult['path']);
-            $npcStationIds = array_keys($npcStations);
+            $npcStationIds = $this->npcStationIdsFromPath($pathResult['path']);
             $jumpPlan = $this->jumpPlanner->plan(
                 $startId,
                 $endId,
@@ -162,7 +181,7 @@ final class RouteService
             $system = $this->systems[$systemId];
             $risk = $this->risk[$systemId] ?? [];
             $isChokepoint = isset($this->chokepoints[$systemId]);
-            $hasNpc = $this->stationsRepo->hasNpcStation($systemId);
+            $hasNpc = !empty($system['has_npc_station']);
             $costs = $this->calculator->cost($system, $risk, $isChokepoint, $hasNpc, $options);
             $totalRisk += $costs['risk'];
             $totalExposure += $costs['exposure'];
@@ -174,6 +193,7 @@ final class RouteService
                 'risk' => $costs['risk'],
                 'chokepoint' => $isChokepoint,
                 'npc_station' => $hasNpc,
+                'npc_station_count' => (int) ($system['npc_station_count'] ?? 0),
             ];
         }
 
@@ -246,10 +266,10 @@ final class RouteService
         }
         $midIndex = (int) floor(count($path) / 2);
         $candidateIds = array_slice($path, max(1, $midIndex - 5), 10);
-        $stations = $this->stationsRepo->listNpcStationsBySystems($candidateIds);
         $candidates = [];
         foreach ($candidateIds as $systemId) {
-            if (!isset($stations[$systemId])) {
+            $system = $this->systems[$systemId] ?? null;
+            if ($system === null || empty($system['has_npc_station'])) {
                 continue;
             }
             $risk = $this->risk[$systemId] ?? [];
@@ -257,7 +277,7 @@ final class RouteService
             $candidates[] = [
                 'system_id' => $systemId,
                 'system_name' => $this->systems[$systemId]['name'],
-                'npc_stations' => $stations[$systemId],
+                'npc_station_count' => (int) ($system['npc_station_count'] ?? 0),
                 'risk_score' => $riskScore,
             ];
         }
@@ -280,7 +300,7 @@ final class RouteService
 
             $risk = $this->risk[$to] ?? [];
             $isChokepoint = isset($this->chokepoints[$to]);
-            $hasNpc = $this->stationsRepo->hasNpcStation($to);
+            $hasNpc = !empty($system['has_npc_station']);
             $costs = $this->calculator->cost($system, $risk, $isChokepoint, $hasNpc, $options);
 
             return $costs['travel'] * $weights['travel_weight']
@@ -453,7 +473,7 @@ final class RouteService
 
             $distanceLy = $this->distanceLy($launchSystem, $end);
             $riskScore = ($this->risk[$launchId]['kills_last_24h'] ?? 0) + ($this->risk[$launchId]['pod_kills_last_24h'] ?? 0);
-            $hasNpc = $this->stationsRepo->hasNpcStation($launchId);
+            $hasNpc = !empty($launchSystem['has_npc_station']);
             $candidateScore = ($distanceLy * 10) + ($riskScore * 2) + ($hasNpc ? -8 : 6) + ($launchRegional ? -15 : 0);
 
             $landingBest = null;
@@ -468,8 +488,7 @@ final class RouteService
                 }
 
                 $gatePathForJump = $this->computeGatePath($launchId, $landingId, $options, $weights, $avoidLow, $avoidNull, $avoidSet);
-                $npcStations = $this->stationsRepo->listNpcStationsBySystems($gatePathForJump);
-                $npcStationIds = array_keys($npcStations);
+                $npcStationIds = $this->npcStationIdsFromPath($gatePathForJump);
                 $jumpPlan = $this->jumpPlanner->plan(
                     $launchId,
                     $landingId,
@@ -532,7 +551,7 @@ final class RouteService
                         'id' => $landingId,
                         'name' => $landingSystem['name'],
                         'gate_hops_to_destination' => $landingSummary['total_gates'],
-                        'npc_station' => $this->stationsRepo->hasNpcStation($landingId),
+                        'npc_station' => !empty($landingSystem['has_npc_station']),
                     ],
                     'gate_segment' => [
                         'systems' => array_map(fn ($id) => $this->systems[$id]['name'], $gatePathToLaunch),
@@ -663,30 +682,61 @@ final class RouteService
 
     private function loadData(): void
     {
-        $this->systems = [];
-        foreach ($this->systemsRepo->listAll() as $system) {
-            $this->systems[(int) $system['id']] = $system;
-        }
+        GraphStore::load($this->systemsRepo, $this->stargatesRepo, $this->logger);
+        $this->systems = GraphStore::systems();
 
         $this->risk = [];
-        foreach ($this->riskRepo->getHeatmap() as $row) {
+        $now = time();
+        $riskRows = null;
+        if (self::$riskCache !== null && ($now - self::$riskCacheLoadedAt) < $this->riskCacheTtlSeconds && $this->cache === null) {
+            $riskRows = self::$riskCache;
+        } else {
+            $riskRows = $this->riskRepo->getHeatmap();
+            if ($this->cache === null) {
+                self::$riskCache = $riskRows;
+                self::$riskCacheLoadedAt = $now;
+            }
+        }
+
+        foreach ($riskRows as $row) {
             $this->risk[(int) $row['system_id']] = $row;
         }
 
-        $this->chokepoints = array_fill_keys($this->riskRepo->listChokepoints(), true);
-
-        $this->graph = new Graph();
-        $this->adjacency = [];
-        $this->reverseAdjacency = [];
-        foreach ($this->stargatesRepo->allEdges() as $edge) {
-            $from = (int) $edge['from_system_id'];
-            $to = (int) $edge['to_system_id'];
-            $isRegional = !empty($edge['is_regional_gate']);
-            $this->graph->addEdge($from, $to);
-            $this->adjacency[$from][] = ['to' => $to, 'is_regional_gate' => $isRegional];
-            $this->reverseAdjacency[$to][] = ['to' => $from, 'is_regional_gate' => $isRegional];
+        if (self::$chokepointsCache === null) {
+            self::$chokepointsCache = $this->riskRepo->listChokepoints();
         }
+        $this->chokepoints = array_fill_keys(self::$chokepointsCache, true);
 
-        $this->logger->info('Route data loaded', ['systems' => count($this->systems)]);
+        $this->graph = GraphStore::graph();
+        $this->adjacency = GraphStore::adjacency();
+        $this->reverseAdjacency = GraphStore::reverseAdjacency();
+
+        $this->logger->info('Route data loaded', ['systems' => count($this->systems), 'risk' => count($this->risk)]);
+    }
+
+    private function routeCacheKey(int $startId, int $endId, array $options): string
+    {
+        $payload = $options;
+        if (isset($payload['avoid_systems']) && is_array($payload['avoid_systems'])) {
+            sort($payload['avoid_systems']);
+        }
+        $payload['from_id'] = $startId;
+        $payload['to_id'] = $endId;
+        $payload['cache_version'] = 1;
+        ksort($payload);
+        return 'route:' . hash('sha256', json_encode($payload, JSON_UNESCAPED_SLASHES));
+    }
+
+    /** @return int[] */
+    private function npcStationIdsFromPath(array $path): array
+    {
+        $ids = [];
+        foreach ($path as $systemId) {
+            $system = $this->systems[$systemId] ?? null;
+            if ($system && !empty($system['has_npc_station'])) {
+                $ids[] = (int) $systemId;
+            }
+        }
+        return $ids;
     }
 }

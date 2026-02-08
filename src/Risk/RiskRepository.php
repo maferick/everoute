@@ -12,7 +12,9 @@ final class RiskRepository
     public function __construct(
         private Connection $connection,
         private ?RedisCache $cache = null,
-        private int $cacheTtlSeconds = 60
+        private int $cacheTtlSeconds = 60,
+        private int $heatmapCacheTtlSeconds = 30,
+        private int $chokepointCacheTtlSeconds = 300
     ) {
     }
 
@@ -50,7 +52,7 @@ final class RiskRepository
         $rows = $stmt->fetchAll();
 
         if ($this->cache) {
-            $ttl = min($this->cacheTtlSeconds, 60);
+            $ttl = max(5, $this->heatmapCacheTtlSeconds);
             $this->cache->setJson('heatmap:global', $rows, $ttl);
         }
 
@@ -79,8 +81,21 @@ final class RiskRepository
 
     public function listChokepoints(): array
     {
+        if ($this->cache) {
+            $cached = $this->cache->getJson('chokepoints:active');
+            if (is_array($cached)) {
+                return array_map('intval', $cached);
+            }
+        }
+
         $stmt = $this->connection->pdo()->query('SELECT system_id FROM chokepoints WHERE is_active = 1');
-        return array_map(static fn ($row) => (int) $row['system_id'], $stmt->fetchAll());
+        $rows = array_map(static fn ($row) => (int) $row['system_id'], $stmt->fetchAll());
+
+        if ($this->cache) {
+            $this->cache->setJson('chokepoints:active', $rows, $this->chokepointCacheTtlSeconds);
+        }
+
+        return $rows;
     }
 
     public function getIngestLastSeen(): ?string

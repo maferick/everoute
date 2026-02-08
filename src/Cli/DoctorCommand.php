@@ -5,7 +5,13 @@ declare(strict_types=1);
 namespace Everoute\Cli;
 
 use DateTimeImmutable;
+use Everoute\Cache\RedisCache;
 use Everoute\Config\Env;
+use Everoute\DB\Connection;
+use Everoute\Routing\GraphStore;
+use Everoute\Security\Logger;
+use Everoute\Universe\StargateRepository;
+use Everoute\Universe\SystemRepository;
 use PDO;
 use PDOException;
 use Symfony\Component\Console\Command\Command;
@@ -57,9 +63,38 @@ final class DoctorCommand extends Command
         $chokepoints = (int) $pdo->query('SELECT COUNT(*) FROM chokepoints')->fetchColumn();
         $riskUpdated = $pdo->query('SELECT MAX(last_updated_at) FROM system_risk')->fetchColumn();
 
+        $connection = new Connection($dsn, (string) $input->getOption('db-user'), $dbPass);
+        $graphStatus = 'not_loaded';
+        try {
+            GraphStore::load(new SystemRepository($connection), new StargateRepository($connection), new Logger());
+            $graphStatus = GraphStore::isLoaded() ? 'loaded' : 'not_loaded';
+        } catch (\Throwable $exception) {
+            $graphStatus = 'error';
+        }
+
+        $redis = RedisCache::fromEnv();
+        $redisStatus = 'disabled';
+        $cacheStats = null;
+        if ($redis) {
+            $redisStatus = $redis->ping() ? 'connected' : 'unreachable';
+            $cacheStats = $redis->stats();
+        }
+
         $output->writeln('<info>Database connection OK.</info>');
         $output->writeln(sprintf('<comment>Systems: %d</comment>', $systems));
         $output->writeln(sprintf('<comment>Chokepoints: %d</comment>', $chokepoints));
+        $output->writeln(sprintf('<comment>Graph loaded: %s (systems cached: %d)</comment>', $graphStatus, GraphStore::systemCount()));
+        $output->writeln(sprintf('<comment>Redis: %s</comment>', $redisStatus));
+
+        if ($cacheStats !== null) {
+            $output->writeln(sprintf(
+                '<comment>Cache stats: keys=%s hits=%s misses=%s memory=%s</comment>',
+                $cacheStats['keys'] ?? 'n/a',
+                $cacheStats['keyspace_hits'] ?? 'n/a',
+                $cacheStats['keyspace_misses'] ?? 'n/a',
+                $cacheStats['used_memory'] ?? 'n/a'
+            ));
+        }
 
         if ($riskUpdated) {
             $lastUpdated = new DateTimeImmutable((string) $riskUpdated);
