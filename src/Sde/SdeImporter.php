@@ -93,7 +93,11 @@ final class SdeImporter
         $batch = [];
         $count = 0;
         foreach (SdeJsonlReader::read($path) as $row) {
-            $batch[] = $this->mapSystemRow($row, $now);
+            $mappedRow = $this->mapSystemRow($row, $now);
+            if ($mappedRow['id'] <= 0) {
+                continue;
+            }
+            $batch[] = $mappedRow;
             $count++;
             if (count($batch) >= self::DEFAULT_BATCH_SIZE) {
                 $this->insertBatch(
