@@ -4,10 +4,12 @@
 declare(strict_types=1);
 
 use Everoute\Cli\CacheWarmCommand;
+use Everoute\Cli\DoctorCommand;
 use Everoute\Cli\FetchRiskCommand;
 use Everoute\Cli\ImportRiskCommand;
 use Everoute\Cli\ImportUniverseCommand;
 use Everoute\Cli\InstallCommand;
+use Everoute\Cli\SeedChokepointsCommand;
 use Everoute\Config\Env;
 use Symfony\Component\Console\Application;
 
@@ -21,4 +23,6 @@ $application->add(new ImportUniverseCommand());
 $application->add(new ImportRiskCommand());
 $application->add(new FetchRiskCommand());
 $application->add(new CacheWarmCommand());
+$application->add(new SeedChokepointsCommand());
+$application->add(new DoctorCommand());
 $application->run();

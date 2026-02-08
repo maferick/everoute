@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Everoute\Cli;
 
 use Everoute\Config\Env;
+use Everoute\Risk\ChokepointSeeder;
 use PDO;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -28,7 +29,8 @@ final class InstallCommand extends Command
             ->addOption('db-port', null, InputOption::VALUE_REQUIRED, 'DB port', (string) Env::int('DB_PORT', 3306))
             ->addOption('db-name', null, InputOption::VALUE_REQUIRED, 'DB name', Env::get('DB_NAME', 'everoute'))
             ->addOption('app-user', null, InputOption::VALUE_REQUIRED, 'App DB user', Env::get('DB_USER', 'everoute_app'))
-            ->addOption('app-pass', null, InputOption::VALUE_REQUIRED, 'App DB password')
+            ->addOption('app-pass', null, InputOption::VALUE_REQUIRED, 'App DB password', Env::get('DB_PASS', ''))
+            ->addOption('db-pass', null, InputOption::VALUE_REQUIRED, 'DB password (alias for app-pass)', Env::get('DB_PASS', ''))
             ->addOption('write-env', null, InputOption::VALUE_NONE, 'Write .env file');
     }
 
@@ -40,11 +42,18 @@ final class InstallCommand extends Command
         $dbName = (string) $input->getOption('db-name');
         $appUser = (string) $input->getOption('app-user');
         $appPass = (string) $input->getOption('app-pass');
+        if ($appPass === '') {
+            $appPass = (string) $input->getOption('db-pass');
+        }
 
         $helper = $this->getHelper('question');
-        if ($appPass === '') {
+        if ($appPass === '' && $input->isInteractive()) {
             $question = new Question('App DB password (leave blank to generate): ');
             $appPass = (string) $helper->ask($input, $output, $question);
+        }
+        if ($appPass === '' && !$input->isInteractive()) {
+            $output->writeln('<error>DB_PASS missing. Provide via --db-pass or .env</error>');
+            return Command::FAILURE;
         }
         if ($appPass === '') {
             $appPass = bin2hex(random_bytes(8));
@@ -82,9 +91,23 @@ final class InstallCommand extends Command
         $pdo->exec($this->loadSql('sql/schema.sql'));
         $pdo->exec($this->loadSql('sql/seed.sql'));
 
-        $output->writeln('<info>Schema and seed applied.</info>');
+        $output->writeln('<info>Schema and core seed applied.</info>');
         $output->writeln("<comment>DB user: {$appUser}</comment>");
         $output->writeln("<comment>DB pass: {$appPass}</comment>");
+
+        $systemsCount = (int) $pdo->query('SELECT COUNT(*) FROM systems')->fetchColumn();
+        if ($systemsCount === 0) {
+            $output->writeln('<comment>Universe data not present (systems=0). Skipping chokepoint seed. Run: php bin/console import:universe --file data/universe.json then php bin/console seed:chokepoints</comment>');
+        } else {
+            $seeder = new ChokepointSeeder();
+            $result = $seeder->seed($pdo, dirname(__DIR__, 2) . '/data/chokepoints.json');
+            $output->writeln(sprintf('<info>Seeded %d chokepoints.</info>', $result['seeded']));
+            if ($result['missing'] !== []) {
+                $output->writeln('<comment>Missing systems: ' . implode(', ', $result['missing']) . '</comment>');
+            }
+        }
+
+        $output->writeln('<comment>Next steps: import universe before seeding chokepoints/risk if not already done.</comment>');
 
         if ($input->getOption('write-env')) {
             $env = file_get_contents(dirname(__DIR__, 2) . '/.env.example');

@@ -14,6 +14,9 @@ Everoute is a production-ready v1 route planning platform for EVE Online, focuse
 composer install
 cp .env.example .env
 php bin/console install --schema-only
+php bin/console import:universe --file data/universe.json
+php bin/console seed:chokepoints
+php bin/console import:risk --file data/risk.json
 php -S localhost:8080 -t public
 ```
 
