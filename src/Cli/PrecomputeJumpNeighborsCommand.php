@@ -49,6 +49,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
             $output->writeln('<error>Missing range column on jump_neighbors. Expected range_ly or range.</error>');
             return Command::FAILURE;
         }
+        $rangeBucketColumn = $this->resolveRangeBucketColumn($pdo);
         $checkpointRepo = new PrecomputeCheckpointRepository($connection);
         $rangeCalculator = new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php');
         $ranges = $this->parseRanges($rangeOption, $rangeCalculator->rangeBuckets());
@@ -109,18 +110,39 @@ final class PrecomputeJumpNeighborsCommand extends Command
                     $storageWarningBytes = 0;
                 }
 
+                $insertColumns = ['system_id', $rangeColumn];
+                $insertValues = [':system_id', ':range_ly'];
+                $updateClauses = [
+                    'neighbor_count = VALUES(neighbor_count)',
+                    'neighbor_ids_blob = VALUES(neighbor_ids_blob)',
+                    'updated_at = VALUES(updated_at)',
+                ];
+
+                if ($rangeBucketColumn !== null) {
+                    $insertColumns[] = $rangeBucketColumn;
+                    $insertValues[] = ':range_bucket';
+                    $updateClauses[] = sprintf('%s = VALUES(%s)', $rangeBucketColumn, $rangeBucketColumn);
+                }
+
+                $insertColumns = array_merge($insertColumns, ['neighbor_count', 'neighbor_ids_blob', 'updated_at']);
+                $insertValues = array_merge($insertValues, [':neighbor_count', ':payload', 'NOW()']);
+
                 $stmt = $pdo->prepare(sprintf(
-                    'INSERT INTO jump_neighbors (system_id, %s, neighbor_count, neighbor_ids_blob, updated_at)
-                    VALUES (:system_id, :range_ly, :neighbor_count, :payload, NOW())
-                    ON DUPLICATE KEY UPDATE neighbor_count = VALUES(neighbor_count), neighbor_ids_blob = VALUES(neighbor_ids_blob), updated_at = VALUES(updated_at)',
-                    $rangeColumn
+                    'INSERT INTO jump_neighbors (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s',
+                    implode(', ', $insertColumns),
+                    implode(', ', $insertValues),
+                    implode(', ', $updateClauses)
                 ));
-                $stmt->execute([
+                $params = [
                     'system_id' => $systemId,
                     'range_ly' => $rangeLy,
                     'neighbor_count' => count($neighbors),
                     'payload' => $payload,
-                ]);
+                ];
+                if ($rangeBucketColumn !== null) {
+                    $params['range_bucket'] = $rangeLy;
+                }
+                $stmt->execute($params);
 
                 $processed++;
                 $checkpointRepo->updateCursor($jobKey, $systemId);
@@ -268,6 +290,22 @@ final class PrecomputeJumpNeighborsCommand extends Command
             return 'range';
         }
         return null;
+    }
+
+    private function resolveRangeBucketColumn(\PDO $pdo): ?string
+    {
+        $stmt = $pdo->prepare(
+            'SELECT column_name FROM information_schema.columns
+             WHERE table_schema = DATABASE()
+               AND table_name = :table
+               AND column_name = :range_bucket'
+        );
+        $stmt->execute([
+            'table' => 'jump_neighbors',
+            'range_bucket' => 'range_bucket',
+        ]);
+        $column = $stmt->fetchColumn();
+        return is_string($column) ? $column : null;
     }
 
     private function ensureRangeColumn(\PDO $pdo, OutputInterface $output): ?string
