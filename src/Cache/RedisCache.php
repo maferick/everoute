@@ -5,16 +5,17 @@ declare(strict_types=1);
 namespace Everoute\Cache;
 
 use Everoute\Config\Env;
+use Everoute\Security\Logger;
 use Redis;
 use RedisException;
 
 final class RedisCache
 {
-    private function __construct(private Redis $client)
+    private function __construct(private Redis $client, private ?Logger $logger = null)
     {
     }
 
-    public static function fromEnv(): ?self
+    public static function fromEnv(?Logger $logger = null): ?self
     {
         if (!Env::bool('REDIS_ENABLED', false)) {
             return null;
@@ -35,18 +36,25 @@ final class RedisCache
             $redis = new Redis();
             $redis->connect($host, $port, 1.5);
             $redis->setOption(Redis::OPT_READ_TIMEOUT, 1.5);
-        } catch (RedisException) {
+        } catch (RedisException $exception) {
+            $logger?->warning('Redis connection failed', [
+                'error' => $exception->getMessage(),
+            ]);
             return null;
         }
 
-        return new self($redis);
+        return new self($redis, $logger);
     }
 
     public function get(string $key): ?string
     {
         try {
             $value = $this->client->get($key);
-        } catch (RedisException) {
+        } catch (RedisException $exception) {
+            $this->logger?->warning('Redis get failed', [
+                'key' => $key,
+                'error' => $exception->getMessage(),
+            ]);
             return null;
         }
 
@@ -76,7 +84,11 @@ final class RedisCache
             } else {
                 $this->client->set($key, $value);
             }
-        } catch (RedisException) {
+        } catch (RedisException $exception) {
+            $this->logger?->warning('Redis set failed', [
+                'key' => $key,
+                'error' => $exception->getMessage(),
+            ]);
         }
     }
 
@@ -89,7 +101,10 @@ final class RedisCache
     {
         try {
             $pong = $this->client->ping();
-        } catch (RedisException) {
+        } catch (RedisException $exception) {
+            $this->logger?->warning('Redis ping failed', [
+                'error' => $exception->getMessage(),
+            ]);
             return false;
         }
 
@@ -100,7 +115,10 @@ final class RedisCache
     {
         try {
             $info = $this->client->info();
-        } catch (RedisException) {
+        } catch (RedisException $exception) {
+            $this->logger?->warning('Redis info failed', [
+                'error' => $exception->getMessage(),
+            ]);
             return ['connected' => false];
         }
 
@@ -129,7 +147,11 @@ final class RedisCache
     {
         try {
             $this->client->del($key);
-        } catch (RedisException) {
+        } catch (RedisException $exception) {
+            $this->logger?->warning('Redis delete failed', [
+                'key' => $key,
+                'error' => $exception->getMessage(),
+            ]);
         }
     }
 }

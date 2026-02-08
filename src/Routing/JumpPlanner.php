@@ -299,8 +299,7 @@ final class JumpPlanner
             $neighborsBySystem,
             $corridor
         );
-        $this->logger->info('Route search metrics', [
-            'type' => 'jump',
+        $this->logger->recordMetric('jump', [
             'nodes_explored' => $pathResult['nodes_explored'],
             'duration_ms' => round($pathResult['duration_ms'], 2),
             'status' => $pathResult['status'],
