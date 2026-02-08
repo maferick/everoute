@@ -7,6 +7,7 @@ namespace Everoute\Routing;
 final class MovementRules
 {
     public const HIGH_SEC_MIN = 0.5;
+    private const LOW_SEC_MIN = 0.1;
 
     public function isCapitalRestricted(array $options): bool
     {
@@ -26,7 +27,38 @@ final class MovementRules
 
     public function isHighSec(array $system): bool
     {
-        return (float) ($system['security'] ?? 0.0) >= self::HIGH_SEC_MIN;
+        return $this->getSystemSpaceType($system) === 'highsec';
+    }
+
+    public function getSystemSpaceType(array $system): string
+    {
+        $spaceType = strtolower((string) ($system['space_type'] ?? $system['space'] ?? $system['region_type'] ?? ''));
+        if ($spaceType !== '') {
+            if ($spaceType === 'wormhole') {
+                return 'wh';
+            }
+            if (in_array($spaceType, ['highsec', 'lowsec', 'nullsec', 'pochven', 'wh'], true)) {
+                return $spaceType;
+            }
+        }
+
+        if (!empty($system['is_pochven'])) {
+            return 'pochven';
+        }
+
+        if (!empty($system['is_wormhole']) || !empty($system['is_wh'])) {
+            return 'wh';
+        }
+
+        $security = (float) ($system['security'] ?? 0.0);
+        if ($security >= self::HIGH_SEC_MIN) {
+            return 'highsec';
+        }
+        if ($security >= self::LOW_SEC_MIN) {
+            return 'lowsec';
+        }
+
+        return 'nullsec';
     }
 
     public function isSystemAllowed(array $system, array $options): bool
@@ -43,7 +75,7 @@ final class MovementRules
         if ($this->isCapitalRestricted($options) && ($this->isHighSec($start) || $this->isHighSec($end))) {
             return [
                 'error' => 'not_feasible',
-                'reason' => 'Capital ships cannot start or end in high-sec systems (sec >= 0.5).',
+                'reason' => 'Rejected systems: capital hulls cannot enter high-sec systems (sec >= 0.5).',
             ];
         }
 
@@ -53,7 +85,7 @@ final class MovementRules
     public function rejectionReasons(array $options): array
     {
         if ($this->isCapitalRestricted($options)) {
-            return ['Rejected systems because: capital hulls cannot enter high-sec systems (sec >= 0.5).'];
+            return ['Rejected systems: capital hulls cannot enter high-sec systems (sec >= 0.5).'];
         }
 
         return [];
