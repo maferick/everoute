@@ -40,6 +40,10 @@ final class PrecomputeJumpNeighborsCommand extends Command
 
         $connection = $this->connection();
         $pdo = $connection->pdo();
+        if (!$this->tableExists($pdo, 'jump_neighbors')) {
+            $output->writeln('<error>Missing jump_neighbors table. Run sql/schema.sql to initialize the database schema.</error>');
+            return Command::FAILURE;
+        }
         $checkpointRepo = new PrecomputeCheckpointRepository($connection);
         $rangeCalculator = new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php');
         $ranges = $this->parseRanges($rangeOption, $rangeCalculator->rangeBuckets());
@@ -175,5 +179,14 @@ final class PrecomputeJumpNeighborsCommand extends Command
         $minutes = intdiv($seconds % 3600, 60);
         $secs = $seconds % 60;
         return sprintf('%02dh:%02dm:%02ds', $hours, $minutes, $secs);
+    }
+
+    private function tableExists(\PDO $pdo, string $table): bool
+    {
+        $stmt = $pdo->prepare(
+            'SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = :table'
+        );
+        $stmt->execute(['table' => $table]);
+        return (bool) $stmt->fetchColumn();
     }
 }
