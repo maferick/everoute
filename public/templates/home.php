@@ -126,8 +126,14 @@ $tabs = [
                                         <li><?= htmlspecialchars($constraint, ENT_QUOTES) ?></li>
                                     <?php endforeach; ?>
                                     <?php if (!empty($route['rules']['jump'])): ?>
-                                        <li>Jump cooldown estimate: <?= htmlspecialchars((string) ($route['rules']['jump']['cooldown_minutes_estimate'] ?? 'n/a'), ENT_QUOTES) ?> min</li>
-                                        <li>Jump fatigue risk: <?= htmlspecialchars((string) ($route['rules']['jump']['fatigue_risk'] ?? 'n/a'), ENT_QUOTES) ?></li>
+                                        <?php if ($route['rules']['jump']['cooldown_minutes_estimate'] !== null): ?>
+                                            <li>Jump cooldown total: <?= htmlspecialchars((string) $route['rules']['jump']['cooldown_minutes_estimate'], ENT_QUOTES) ?> min</li>
+                                            <li>Jump fatigue estimate: <?= htmlspecialchars((string) ($route['rules']['jump']['fatigue_minutes_estimate'] ?? '0'), ENT_QUOTES) ?> min</li>
+                                            <li>Jump fatigue risk: <?= htmlspecialchars((string) ($route['rules']['jump']['fatigue_risk'] ?? 'not_applicable'), ENT_QUOTES) ?></li>
+                                        <?php else: ?>
+                                            <li>Jump cooldown total: not applicable</li>
+                                            <li>Jump fatigue risk: not applicable</li>
+                                        <?php endif; ?>
                                     <?php endif; ?>
                                 </ul>
                             <?php endif; ?>
@@ -139,6 +145,10 @@ $tabs = [
                             </ul>
                             <?php if (!empty($route['plans'])): ?>
                                 <h3>Gate vs Jump (Capital/JF)</h3>
+                                <?php if (!empty($route['plans']['recommended'])): ?>
+                                    <p class="muted">Recommended: <?= htmlspecialchars((string) ($route['plans']['recommended']['best'] ?? 'gate'), ENT_QUOTES) ?>
+                                        (<?= htmlspecialchars((string) ($route['plans']['recommended']['reason'] ?? ''), ENT_QUOTES) ?>)</p>
+                                <?php endif; ?>
                                 <div class="stats">
                                     <div>Gate time: <?= htmlspecialchars((string) ($route['plans']['gate']['estimated_time_s'] ?? 'n/a'), ENT_QUOTES) ?>s</div>
                                     <div>Gate exposure: <?= htmlspecialchars((string) ($route['plans']['gate']['exposure_score'] ?? 'n/a'), ENT_QUOTES) ?></div>
@@ -151,12 +161,63 @@ $tabs = [
                                             <div>Jump range: <?= htmlspecialchars((string) ($route['plans']['jump']['effective_jump_range_ly'] ?? 'n/a'), ENT_QUOTES) ?> LY</div>
                                             <div>Jump exposure: <?= htmlspecialchars((string) ($route['plans']['jump']['exposure_score'] ?? 'n/a'), ENT_QUOTES) ?></div>
                                             <div>Jump risk: <?= htmlspecialchars((string) ($route['plans']['jump']['risk_score'] ?? 'n/a'), ENT_QUOTES) ?></div>
+                                            <div>Jump hops: <?= htmlspecialchars((string) ($route['plans']['jump']['jump_hops_count'] ?? 'n/a'), ENT_QUOTES) ?></div>
+                                            <div>Jump total LY: <?= htmlspecialchars((string) ($route['plans']['jump']['jump_total_ly'] ?? 'n/a'), ENT_QUOTES) ?></div>
+                                            <div>Jump cooldown total: <?= htmlspecialchars((string) ($route['plans']['jump']['jump_cooldown_total_minutes'] ?? 'n/a'), ENT_QUOTES) ?> min</div>
+                                            <div>Jump fatigue: <?= htmlspecialchars((string) ($route['plans']['jump']['jump_fatigue_estimate_minutes'] ?? 'n/a'), ENT_QUOTES) ?> min (<?= htmlspecialchars((string) ($route['plans']['jump']['jump_fatigue_risk_label'] ?? 'n/a'), ENT_QUOTES) ?>)</div>
                                         </div>
                                         <?php if (!empty($route['plans']['jump']['midpoints'])): ?>
                                             <p>Jump midpoints: <?= htmlspecialchars(implode(', ', $route['plans']['jump']['midpoints']), ENT_QUOTES) ?></p>
                                         <?php endif; ?>
+                                        <?php if (!empty($route['plans']['jump']['jump_segments'])): ?>
+                                            <p>Jump segments:
+                                                <?= htmlspecialchars(implode(', ', array_map(
+                                                    static fn ($seg) => sprintf('%s → %s (%.2f LY)', $seg['from'], $seg['to'], $seg['distance_ly']),
+                                                    $route['plans']['jump']['jump_segments']
+                                                )), ENT_QUOTES) ?>
+                                            </p>
+                                        <?php endif; ?>
                                     <?php else: ?>
                                         <p class="error">Jump plan not feasible: <?= htmlspecialchars((string) ($route['plans']['jump']['reason'] ?? 'Unknown reason'), ENT_QUOTES) ?></p>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+                                <?php if (!empty($route['plans']['hybrid'])): ?>
+                                    <h4>Hybrid Plan</h4>
+                                    <?php if (!empty($route['plans']['hybrid']['feasible'])): ?>
+                                        <div class="stats">
+                                            <div>Hybrid total time: <?= htmlspecialchars((string) ($route['plans']['hybrid']['total_time_s'] ?? 'n/a'), ENT_QUOTES) ?>s</div>
+                                            <div>Hybrid exposure: <?= htmlspecialchars((string) ($route['plans']['hybrid']['total_exposure_score'] ?? 'n/a'), ENT_QUOTES) ?></div>
+                                            <div>Hybrid risk: <?= htmlspecialchars((string) ($route['plans']['hybrid']['total_risk_score'] ?? 'n/a'), ENT_QUOTES) ?></div>
+                                        </div>
+                                        <p>Launch system: <?= htmlspecialchars((string) ($route['plans']['hybrid']['launch_system']['name'] ?? 'n/a'), ENT_QUOTES) ?></p>
+                                        <p>Landing system: <?= htmlspecialchars((string) ($route['plans']['hybrid']['landing_system']['name'] ?? 'n/a'), ENT_QUOTES) ?></p>
+                                        <?php if (!empty($route['plans']['hybrid']['reasons'])): ?>
+                                            <ul>
+                                                <?php foreach ($route['plans']['hybrid']['reasons'] as $reason): ?>
+                                                    <li><?= htmlspecialchars($reason, ENT_QUOTES) ?></li>
+                                                <?php endforeach; ?>
+                                            </ul>
+                                        <?php endif; ?>
+                                        <?php if (!empty($route['plans']['hybrid']['gate_segment']['systems'])): ?>
+                                            <p>Gate segment:
+                                                <?= htmlspecialchars(implode(' → ', $route['plans']['hybrid']['gate_segment']['systems']), ENT_QUOTES) ?>
+                                            </p>
+                                        <?php endif; ?>
+                                        <?php if (!empty($route['plans']['hybrid']['jump_segment']['jump_segments'])): ?>
+                                            <p>Jump segment:
+                                                <?= htmlspecialchars(implode(', ', array_map(
+                                                    static fn ($seg) => sprintf('%s → %s (%.2f LY)', $seg['from'], $seg['to'], $seg['distance_ly']),
+                                                    $route['plans']['hybrid']['jump_segment']['jump_segments']
+                                                )), ENT_QUOTES) ?>
+                                            </p>
+                                        <?php endif; ?>
+                                        <?php if (!empty($route['plans']['hybrid']['landing_gate_segment']['systems'])): ?>
+                                            <p>Landing gate segment:
+                                                <?= htmlspecialchars(implode(' → ', $route['plans']['hybrid']['landing_gate_segment']['systems']), ENT_QUOTES) ?>
+                                            </p>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <p class="error">Hybrid plan not feasible: <?= htmlspecialchars((string) ($route['plans']['hybrid']['reason'] ?? 'Unknown reason'), ENT_QUOTES) ?></p>
                                     <?php endif; ?>
                                 <?php endif; ?>
                             <?php endif; ?>

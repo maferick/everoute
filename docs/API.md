@@ -22,6 +22,7 @@ Request JSON:
 
 Notes:
 - `jump_ship_type` and `jump_skill_level` are used for jump-assisted planning in Capital/JF mode.
+- Hybrid planning uses gate-to-launch plus jump chain with optional landing gate segment. Configure hop limits with `HYBRID_LAUNCH_MAX_GATES` (default 6) and `HYBRID_LANDING_MAX_GATES` (default 3).
 - When routes are not feasible (e.g. capital start/end in high-sec), the response includes `error` and `reason`.
 
 Response (truncated):
@@ -38,12 +39,14 @@ Response (truncated):
         "constraints": ["Rejected systems because: capital hulls cannot enter high-sec systems (sec >= 0.5)."],
         "jump": {
           "cooldown_minutes_estimate": 18.0,
+          "fatigue_minutes_estimate": 64.5,
           "fatigue_risk": "medium"
         }
       },
       "plans": {
         "gate": {
           "estimated_time_s": 540,
+          "total_time_s": 540,
           "risk_score": 12.4,
           "exposure_score": 5.2,
           "total_jumps": 9
@@ -52,10 +55,30 @@ Response (truncated):
           "feasible": true,
           "effective_jump_range_ly": 6,
           "estimated_time_s": 420,
-          "cooldown_minutes_estimate": 12,
-          "fatigue_hours_estimate": 1.5,
-          "fatigue_risk": "low",
+          "jump_hops_count": 2,
+          "jump_total_ly": 9.5,
+          "jump_cooldown_total_minutes": 12,
+          "jump_fatigue_estimate_minutes": 64.5,
+          "jump_fatigue_risk_label": "low",
+          "jump_segments": [{"from": "Jita", "to": "Niarja", "distance_ly": 4.2}],
           "midpoints": ["Niarja"]
+        },
+        "hybrid": {
+          "feasible": true,
+          "total_time_s": 510,
+          "launch_system": {"name": "Perimeter", "used_regional_gate": true},
+          "gate_segment": {"systems": ["Jita", "Perimeter"]},
+          "jump_segment": {
+            "jump_hops_count": 1,
+            "jump_total_ly": 6.1,
+            "jump_cooldown_total_minutes": 8.0,
+            "jump_fatigue_risk_label": "low"
+          },
+          "reasons": ["Gated across region boundary to reposition."]
+        },
+        "recommended": {
+          "best": "hybrid",
+          "reason": "Hybrid plan offers the lowest total time estimate."
         }
       },
       "systems": [{"name": "Jita", "risk": 4.1}],

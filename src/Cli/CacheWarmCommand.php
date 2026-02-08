@@ -8,6 +8,7 @@ use Everoute\Cache\RedisCache;
 use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
 use Everoute\Routing\JumpPlanner;
+use Everoute\Routing\JumpFatigueModel;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\MovementRules;
 use Everoute\Routing\RouteService;
@@ -45,7 +46,7 @@ final class CacheWarmCommand extends Command
             new RiskRepository($connection, $riskCache, $riskCacheTtl),
             $weightCalculator = new WeightCalculator(),
             $movementRules = new MovementRules(),
-            new JumpPlanner(new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php'), $weightCalculator, $movementRules),
+            new JumpPlanner(new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php'), $weightCalculator, $movementRules, new JumpFatigueModel()),
             new Logger()
         );
         $service->refresh();

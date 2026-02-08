@@ -46,12 +46,12 @@ final class SdeImporter
                 'systems_stage',
                 ['id', 'name', 'security', 'region_id', 'constellation_id', 'x', 'y', 'z', 'system_size_au', 'updated_at']
             );
-            $this->insertFromStage(
-                $pdo,
-                'stargates',
-                'stargates_stage',
-                ['id', 'from_system_id', 'to_system_id', 'updated_at']
-            );
+        $this->insertFromStage(
+            $pdo,
+            'stargates',
+            'stargates_stage',
+            ['id', 'from_system_id', 'to_system_id', 'updated_at']
+        );
             $this->insertFromStage(
                 $pdo,
                 'stations',
@@ -64,6 +64,8 @@ final class SdeImporter
             $pdo->rollBack();
             throw $e;
         }
+
+        $this->updateRegionalGates($pdo);
     }
 
     private function createStageTables(PDO $pdo): void
@@ -89,6 +91,7 @@ final class SdeImporter
             id BIGINT PRIMARY KEY,
             from_system_id BIGINT NOT NULL,
             to_system_id BIGINT NOT NULL,
+            is_regional_gate TINYINT(1) NOT NULL DEFAULT 0,
             INDEX idx_from_system (from_system_id),
             INDEX idx_to_system (to_system_id),
             updated_at DATETIME NOT NULL
@@ -123,9 +126,11 @@ final class SdeImporter
             id BIGINT PRIMARY KEY,
             from_system_id BIGINT NOT NULL,
             to_system_id BIGINT NOT NULL,
+            is_regional_gate TINYINT(1) NOT NULL DEFAULT 0,
             updated_at DATETIME NOT NULL,
             INDEX idx_from_system (from_system_id),
             INDEX idx_to_system (to_system_id),
+            INDEX idx_regional_gate (is_regional_gate),
             CONSTRAINT fk_stargate_from FOREIGN KEY (from_system_id) REFERENCES systems (id) ON DELETE CASCADE,
             CONSTRAINT fk_stargate_to FOREIGN KEY (to_system_id) REFERENCES systems (id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
@@ -155,6 +160,8 @@ final class SdeImporter
         $this->ensureStationTypeColumn($pdo);
         $this->ensureStationColumn($pdo, 'is_npc', 'TINYINT(1) NOT NULL DEFAULT 1');
         $this->ensureStationColumn($pdo, 'updated_at', 'DATETIME NOT NULL');
+        $this->ensureStargateColumn($pdo, 'is_regional_gate', 'TINYINT(1) NOT NULL DEFAULT 0');
+        $this->ensureStargateIndex($pdo, 'idx_regional_gate', 'is_regional_gate');
     }
 
     private function ensureStationTypeColumn(PDO $pdo): void
@@ -182,6 +189,22 @@ final class SdeImporter
         if (!$this->tableHasColumn($pdo, 'stations', $column)) {
             $pdo->exec(sprintf('ALTER TABLE stations ADD COLUMN %s %s', $column, $definition));
         }
+    }
+
+    private function ensureStargateColumn(PDO $pdo, string $column, string $definition): void
+    {
+        if (!$this->tableHasColumn($pdo, 'stargates', $column)) {
+            $pdo->exec(sprintf('ALTER TABLE stargates ADD COLUMN %s %s', $column, $definition));
+        }
+    }
+
+    private function ensureStargateIndex(PDO $pdo, string $index, string $column): void
+    {
+        if ($this->tableHasIndex($pdo, 'stargates', $index)) {
+            return;
+        }
+
+        $pdo->exec(sprintf('CREATE INDEX %s ON stargates (%s)', $index, $column));
     }
 
     private function loadSystems(PDO $pdo, string $path, string $now, ?callable $progress): void
@@ -405,6 +428,33 @@ final class SdeImporter
         $stmt->execute(['table' => $table, 'column' => $column]);
 
         return (bool) $stmt->fetchColumn();
+    }
+
+    private function tableHasIndex(PDO $pdo, string $table, string $index): bool
+    {
+        $stmt = $pdo->prepare(
+            'SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = :table AND index_name = :index'
+        );
+        $stmt->execute(['table' => $table, 'index' => $index]);
+
+        return (bool) $stmt->fetchColumn();
+    }
+
+    private function updateRegionalGates(PDO $pdo): void
+    {
+        if (!$this->tableHasColumn($pdo, 'stargates', 'is_regional_gate')) {
+            return;
+        }
+
+        $pdo->exec(
+            'UPDATE stargates s
+            JOIN systems a ON s.from_system_id = a.id
+            JOIN systems b ON s.to_system_id = b.id
+            SET s.is_regional_gate = CASE
+                WHEN a.region_id IS NOT NULL AND b.region_id IS NOT NULL AND a.region_id <> b.region_id THEN 1
+                ELSE 0
+            END'
+        );
     }
 
     private function report(?callable $progress, string $message): void

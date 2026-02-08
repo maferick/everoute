@@ -12,6 +12,7 @@ use Everoute\Http\Response;
 use Everoute\Http\Router;
 use Everoute\Risk\RiskRepository;
 use Everoute\Routing\JumpPlanner;
+use Everoute\Routing\JumpFatigueModel;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\MovementRules;
 use Everoute\Routing\RouteService;
@@ -53,7 +54,7 @@ $riskRepo = new RiskRepository($connection, $riskCache, $riskCacheTtl);
 $weightCalculator = new WeightCalculator();
 $movementRules = new MovementRules();
 $jumpRanges = new JumpRangeCalculator(__DIR__ . '/../config/jump_ranges.php');
-$jumpPlanner = new JumpPlanner($jumpRanges, $weightCalculator, $movementRules);
+$jumpPlanner = new JumpPlanner($jumpRanges, $weightCalculator, $movementRules, new JumpFatigueModel());
 
 $routeService = new RouteService(
     $systems,
