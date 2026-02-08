@@ -77,7 +77,7 @@ foreach ($gates as $gate) {
 $weightCalculator = new WeightCalculator();
 $movementRules = new MovementRules();
 $jumpPlanner = new JumpPlanner(
-    new JumpRangeCalculator(__DIR__ . '/../config/jump_ranges.php'),
+    new JumpRangeCalculator(__DIR__ . '/../config/ships.php', __DIR__ . '/../config/jump_ranges.php'),
     $weightCalculator,
     $movementRules,
     new JumpFatigueModel(),

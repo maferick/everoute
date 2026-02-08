@@ -11,7 +11,7 @@ if (file_exists($autoload)) {
     require_once __DIR__ . '/../src/Routing/JumpRangeCalculator.php';
 }
 
-$calculator = new JumpRangeCalculator(__DIR__ . '/../config/jump_ranges.php');
+$calculator = new JumpRangeCalculator(__DIR__ . '/../config/ships.php', __DIR__ . '/../config/jump_ranges.php');
 
 $previous = null;
 for ($level = 0; $level <= 5; $level++) {
@@ -26,7 +26,7 @@ for ($level = 0; $level <= 5; $level++) {
 }
 
 $level5 = $calculator->effectiveRange('carrier', 5);
-if ($level5 === null || abs($level5 - 10.0) > 0.01) {
+if ($level5 === null || abs($level5 - 7.0) > 0.01) {
     throw new RuntimeException('Unexpected level 5 range for carrier.');
 }
 
