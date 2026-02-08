@@ -1,0 +1,24 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use Everoute\Cli\CacheWarmCommand;
+use Everoute\Cli\FetchRiskCommand;
+use Everoute\Cli\ImportRiskCommand;
+use Everoute\Cli\ImportUniverseCommand;
+use Everoute\Cli\InstallCommand;
+use Everoute\Config\Env;
+use Symfony\Component\Console\Application;
+
+require_once __DIR__ . '/../vendor/autoload.php';
+
+Env::load(dirname(__DIR__));
+
+$application = new Application('Everoute Console', '1.0.0');
+$application->add(new InstallCommand());
+$application->add(new ImportUniverseCommand());
+$application->add(new ImportRiskCommand());
+$application->add(new FetchRiskCommand());
+$application->add(new CacheWarmCommand());
+$application->run();
