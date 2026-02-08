@@ -318,6 +318,9 @@ final class PrecomputeJumpNeighborsCommand extends Command
         }
 
         if ($existing !== []) {
+            if (in_array('system_id', $existing, true)) {
+                $this->ensureIndex($pdo, 'jump_neighbors', 'idx_jump_neighbors_system', 'system_id');
+            }
             $pdo->exec('ALTER TABLE jump_neighbors DROP PRIMARY KEY');
         }
 
