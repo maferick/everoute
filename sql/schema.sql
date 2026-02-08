@@ -98,8 +98,8 @@ CREATE TABLE IF NOT EXISTS route_cache (
 
 CREATE TABLE IF NOT EXISTS precompute_checkpoints (
     job_key VARCHAR(64) PRIMARY KEY,
-    cursor BIGINT NULL,
-    meta JSON NULL,
+    `cursor` BIGINT NULL,
+    `meta` JSON NULL,
     started_at DATETIME NULL,
     updated_at DATETIME NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
