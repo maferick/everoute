@@ -24,14 +24,36 @@ final class ChokepointSeeder
 
         $lookupStmt = $pdo->prepare('SELECT id FROM systems WHERE LOWER(name) = LOWER(:name) LIMIT 1');
         $hasCategory = $this->columnExists($pdo, 'chokepoints', 'category');
-        $upsertStmt = $pdo->prepare($hasCategory
-            ? 'INSERT INTO chokepoints (system_id, reason, category, is_active, created_at, updated_at)
-               VALUES (:system_id, :reason, :category, :is_active, :created_at, :updated_at)
-               ON DUPLICATE KEY UPDATE reason = VALUES(reason), category = VALUES(category), is_active = VALUES(is_active), updated_at = VALUES(updated_at)'
-            : 'INSERT INTO chokepoints (system_id, reason, is_active, created_at, updated_at)
-               VALUES (:system_id, :reason, :is_active, :created_at, :updated_at)
-               ON DUPLICATE KEY UPDATE reason = VALUES(reason), is_active = VALUES(is_active), updated_at = VALUES(updated_at)'
-        );
+        $hasCreatedAt = $this->columnExists($pdo, 'chokepoints', 'created_at');
+        $hasUpdatedAt = $this->columnExists($pdo, 'chokepoints', 'updated_at');
+
+        $columns = ['system_id', 'reason', 'is_active'];
+        $values = [':system_id', ':reason', ':is_active'];
+        $updates = ['reason = VALUES(reason)', 'is_active = VALUES(is_active)'];
+
+        if ($hasCategory) {
+            $columns[] = 'category';
+            $values[] = ':category';
+            $updates[] = 'category = VALUES(category)';
+        }
+
+        if ($hasCreatedAt) {
+            $columns[] = 'created_at';
+            $values[] = ':created_at';
+        }
+
+        if ($hasUpdatedAt) {
+            $columns[] = 'updated_at';
+            $values[] = ':updated_at';
+            $updates[] = 'updated_at = VALUES(updated_at)';
+        }
+
+        $upsertStmt = $pdo->prepare(sprintf(
+            'INSERT INTO chokepoints (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s',
+            implode(', ', $columns),
+            implode(', ', $values),
+            implode(', ', $updates)
+        ));
 
         $now = (new DateTimeImmutable())->format('Y-m-d H:i:s');
         $seeded = 0;
@@ -58,12 +80,18 @@ final class ChokepointSeeder
                 ':system_id' => (int) $systemId,
                 ':reason' => $item['reason'] ?? null,
                 ':is_active' => isset($item['is_active']) ? (int) (bool) $item['is_active'] : 1,
-                ':created_at' => $now,
-                ':updated_at' => $now,
             ];
 
             if ($hasCategory) {
                 $params[':category'] = $item['category'] ?? null;
+            }
+
+            if ($hasCreatedAt) {
+                $params[':created_at'] = $now;
+            }
+
+            if ($hasUpdatedAt) {
+                $params[':updated_at'] = $now;
             }
 
             $upsertStmt->execute($params);
