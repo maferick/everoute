@@ -1,0 +1,100 @@
+body {
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    background: #0b0d12;
+    color: #f2f4f8;
+    margin: 0;
+}
+.container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px;
+}
+header {
+    margin-bottom: 24px;
+}
+.tagline {
+    color: #9aa5b1;
+}
+.card {
+    background: #151a21;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 24px;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+}
+label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.9rem;
+}
+input, select, button {
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid #2b313a;
+    background: #0f141b;
+    color: #f2f4f8;
+}
+button {
+    margin-top: 12px;
+    background: #2563eb;
+    border: none;
+    cursor: pointer;
+}
+button:hover {
+    background: #1d4ed8;
+}
+.toggles {
+    display: flex;
+    gap: 16px;
+    margin: 12px 0;
+    flex-wrap: wrap;
+}
+.stats {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #1f2937;
+    margin-left: 6px;
+    font-size: 0.75rem;
+}
+.badge.danger {
+    background: #dc2626;
+}
+.tabs {
+    margin-top: 16px;
+}
+.tab-buttons {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+.tab-button {
+    background: #1f2937;
+}
+.tab-button.active {
+    background: #2563eb;
+}
+.tab-panel {
+    display: none;
+}
+.tab-panel.active {
+    display: block;
+}
+.muted {
+    color: #9aa5b1;
+}
+.error {
+    color: #f87171;
+}
