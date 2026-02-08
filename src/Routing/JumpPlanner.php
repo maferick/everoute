@@ -309,9 +309,9 @@ final class JumpPlanner
             return [
                 'error' => $this->buildInfeasibleReason('No valid midpoint chain within jump range.', $avoidFlags, $jumpHighSecRestricted),
                 'debug' => [
-                    'candidate_systems_evaluated' => 0,
-                    'edges_built' => 0,
-                    'max_segment_distance_ly' => 0.0,
+                    'nodes_explored' => $pathResult['nodes_explored'] ?? 0,
+                    'duration_ms' => round((float) ($pathResult['duration_ms'] ?? 0.0), 2),
+                    'status' => $pathResult['status'] ?? 'failed',
                     'chain_length' => 0,
                 ],
             ];
@@ -332,9 +332,9 @@ final class JumpPlanner
             'segments' => $segments,
             'midpoints' => $midpoints,
             'debug' => [
-                'candidate_systems_evaluated' => 0,
-                'edges_built' => 0,
-                'max_segment_distance_ly' => 0.0,
+                'nodes_explored' => $pathResult['nodes_explored'] ?? 0,
+                'duration_ms' => round((float) ($pathResult['duration_ms'] ?? 0.0), 2),
+                'status' => $pathResult['status'] ?? 'success',
                 'chain_length' => count($segments),
             ],
         ];
@@ -369,6 +369,9 @@ final class JumpPlanner
             return $tentative + ($riskScore * 0.05) - $npcBonus + $avoidPenalty;
         };
 
+        $maxNodes = Env::int('JUMP_MAX_NODES', 2000);
+        $maxMs = Env::int('JUMP_MAX_MS', 350);
+
         return $astar->shortestPath(
             $neighborsBySystem,
             $startId,
@@ -376,7 +379,9 @@ final class JumpPlanner
             $costFn,
             $heuristic,
             $allowFn,
-            $corridor
+            $corridor,
+            max(200, $maxNodes),
+            max(50, $maxMs) / 1000
         );
     }
 
