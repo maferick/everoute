@@ -33,7 +33,7 @@ final class SdeInstallCommand extends Command
         $http = new SdeHttpClient($config);
         $downloader = new SdeDownloader($config, $storage, $http);
         $meta = new SdeMetaRepository($this->connection());
-        $importer = new SdeImporter($this->connection(), $config);
+        $importer = new SdeImporter($this->connection());
 
         $latest = $downloader->fetchLatestBuildNumber();
         $output->writeln(sprintf('<info>Latest CCP SDE build: %d</info>', $latest));
@@ -44,7 +44,7 @@ final class SdeInstallCommand extends Command
         $paths = $downloader->extractRequiredFiles($zipPath, $latest);
         $output->writeln('<info>Extracted required JSONL files.</info>');
 
-        $importer->import($paths, $latest);
+        $importer->import($paths, $latest, static fn (string $message) => $output->writeln($message));
         $meta->recordInstall($latest, $config->variant, $downloader->buildUrl($latest), 'full import');
 
         $output->writeln('<info>SDE import complete.</info>');

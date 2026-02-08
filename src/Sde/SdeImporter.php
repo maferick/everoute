@@ -10,26 +10,27 @@ use RuntimeException;
 
 final class SdeImporter
 {
-    public function __construct(private Connection $connection, private SdeConfig $config)
+    private const DEFAULT_BATCH_SIZE = 1000;
+    private const PROGRESS_EVERY = 5000;
+
+    public function __construct(private Connection $connection)
     {
     }
 
     /**
      * @param array{systems: string, stargates: string, stations: string} $paths
      */
-    public function import(array $paths, int $buildNumber): void
+    public function import(array $paths, int $buildNumber, ?callable $progress = null): void
     {
         $pdo = $this->connection->pdo();
-        $pdo->setAttribute(PDO::MYSQL_ATTR_LOCAL_INFILE, true);
 
         $now = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-        $localInfile = $this->localInfileEnabled($pdo);
 
         $this->createStageTables($pdo);
 
-        $this->loadSystems($pdo, $paths['systems'], $now, $localInfile);
-        $this->loadStargates($pdo, $paths['stargates'], $now, $localInfile);
-        $this->loadStations($pdo, $paths['stations'], $now, $localInfile);
+        $this->loadSystems($pdo, $paths['systems'], $now, $progress);
+        $this->loadStargates($pdo, $paths['stargates'], $now, $progress);
+        $this->loadStations($pdo, $paths['stations'], $now, $progress);
 
         $pdo->beginTransaction();
         try {
@@ -46,17 +47,6 @@ final class SdeImporter
             $pdo->rollBack();
             throw $e;
         }
-    }
-
-    private function localInfileEnabled(PDO $pdo): bool
-    {
-        $stmt = $pdo->query("SHOW VARIABLES LIKE 'local_infile'");
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!is_array($row)) {
-            return false;
-        }
-        $value = strtolower((string) ($row['Value'] ?? ''));
-        return in_array($value, ['1', 'on', 'true'], true);
     }
 
     private function createStageTables(PDO $pdo): void
@@ -97,23 +87,41 @@ final class SdeImporter
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
     }
 
-    private function loadSystems(PDO $pdo, string $path, string $now, bool $useLocalInfile): void
+    private function loadSystems(PDO $pdo, string $path, string $now, ?callable $progress): void
     {
-        if ($useLocalInfile) {
-            $csvPath = $this->writeSystemsCsv($path, $now);
-            $this->loadCsv($pdo, $csvPath, 'systems_stage', 'id, name, security, region_id, constellation_id, x, y, z, system_size_au, updated_at');
-            @unlink($csvPath);
-            return;
+        $this->report($progress, '<info>Importing systems...</info>');
+        $batch = [];
+        $count = 0;
+        foreach (SdeJsonlReader::read($path) as $row) {
+            $batch[] = $this->mapSystemRow($row, $now);
+            $count++;
+            if (count($batch) >= self::DEFAULT_BATCH_SIZE) {
+                $this->insertBatch(
+                    $pdo,
+                    'systems_stage',
+                    ['id', 'name', 'security', 'region_id', 'constellation_id', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
+                    $batch
+                );
+                $batch = [];
+                $this->reportEvery($progress, 'Systems', $count);
+            }
         }
 
-        $stmt = $pdo->prepare('INSERT INTO systems_stage (id, name, security, region_id, constellation_id, x, y, z, system_size_au, updated_at) VALUES (:id, :name, :security, :region_id, :constellation_id, :x, :y, :z, :system_size_au, :updated_at)');
-        foreach (SdeJsonlReader::read($path) as $row) {
-            $stmt->execute($this->mapSystemRow($row, $now));
+        if ($batch !== []) {
+            $this->insertBatch(
+                $pdo,
+                'systems_stage',
+                ['id', 'name', 'security', 'region_id', 'constellation_id', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
+                $batch
+            );
         }
+
+        $this->report($progress, sprintf('<info>Systems imported: %d</info>', $count));
     }
 
-    private function loadStargates(PDO $pdo, string $path, string $now, bool $useLocalInfile): void
+    private function loadStargates(PDO $pdo, string $path, string $now, ?callable $progress): void
     {
+        $this->report($progress, '<info>Importing stargates...</info>');
         $stargateSystems = [];
         $destinations = [];
 
@@ -128,6 +136,7 @@ final class SdeImporter
         }
 
         $rows = [];
+        $count = 0;
         foreach ($destinations as $id => $destination) {
             $toSystem = null;
             if (is_array($destination)) {
@@ -151,24 +160,36 @@ final class SdeImporter
                 'to_system_id' => $toSystem,
                 'updated_at' => $now,
             ];
+            $count++;
+            if (count($rows) >= self::DEFAULT_BATCH_SIZE) {
+                $this->insertBatch(
+                    $pdo,
+                    'stargates_stage',
+                    ['id', 'from_system_id', 'to_system_id', 'updated_at'],
+                    $rows
+                );
+                $rows = [];
+                $this->reportEvery($progress, 'Stargates', $count);
+            }
         }
 
-        if ($useLocalInfile) {
-            $csvPath = $this->writeCsvRows($rows, ['id', 'from_system_id', 'to_system_id', 'updated_at']);
-            $this->loadCsv($pdo, $csvPath, 'stargates_stage', 'id, from_system_id, to_system_id, updated_at');
-            @unlink($csvPath);
-            return;
+        if ($rows !== []) {
+            $this->insertBatch(
+                $pdo,
+                'stargates_stage',
+                ['id', 'from_system_id', 'to_system_id', 'updated_at'],
+                $rows
+            );
         }
 
-        $stmt = $pdo->prepare('INSERT INTO stargates_stage (id, from_system_id, to_system_id, updated_at) VALUES (:id, :from_system_id, :to_system_id, :updated_at)');
-        foreach ($rows as $row) {
-            $stmt->execute($row);
-        }
+        $this->report($progress, sprintf('<info>Stargates imported: %d</info>', $count));
     }
 
-    private function loadStations(PDO $pdo, string $path, string $now, bool $useLocalInfile): void
+    private function loadStations(PDO $pdo, string $path, string $now, ?callable $progress): void
     {
+        $this->report($progress, '<info>Importing NPC stations...</info>');
         $rows = [];
+        $count = 0;
         foreach (SdeJsonlReader::read($path) as $row) {
             $stationId = (int) ($row['stationID'] ?? $row['stationId'] ?? $row['id'] ?? 0);
             $systemId = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['system_id'] ?? 0);
@@ -187,85 +208,77 @@ final class SdeImporter
                 'is_npc' => 1,
                 'updated_at' => $now,
             ];
+            $count++;
+            if (count($rows) >= self::DEFAULT_BATCH_SIZE) {
+                $this->insertBatch(
+                    $pdo,
+                    'stations_stage',
+                    ['station_id', 'system_id', 'name', 'is_npc', 'updated_at'],
+                    $rows
+                );
+                $rows = [];
+                $this->reportEvery($progress, 'Stations', $count);
+            }
         }
 
-        if ($useLocalInfile) {
-            $csvPath = $this->writeCsvRows($rows, ['station_id', 'system_id', 'name', 'is_npc', 'updated_at']);
-            $this->loadCsv($pdo, $csvPath, 'stations_stage', 'station_id, system_id, name, is_npc, updated_at');
-            @unlink($csvPath);
+        if ($rows !== []) {
+            $this->insertBatch(
+                $pdo,
+                'stations_stage',
+                ['station_id', 'system_id', 'name', 'is_npc', 'updated_at'],
+                $rows
+            );
+        }
+
+        $this->report($progress, sprintf('<info>Stations imported: %d</info>', $count));
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<int, string> $columns
+     */
+    private function insertBatch(PDO $pdo, string $table, array $columns, array $rows): void
+    {
+        if ($rows === []) {
             return;
         }
 
-        $stmt = $pdo->prepare('INSERT INTO stations_stage (station_id, system_id, name, is_npc, updated_at) VALUES (:station_id, :system_id, :name, :is_npc, :updated_at)');
-        foreach ($rows as $row) {
-            $stmt->execute($row);
-        }
-    }
-
-    private function loadCsv(PDO $pdo, string $csvPath, string $table, string $columns): void
-    {
-        $escaped = addslashes($csvPath);
+        $placeholders = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+        $valuesClause = implode(', ', array_fill(0, count($rows), $placeholders));
         $sql = sprintf(
-            "LOAD DATA LOCAL INFILE '%s' INTO TABLE %s FIELDS TERMINATED BY ',' ENCLOSED BY '\"' ESCAPED BY '\\\\' LINES TERMINATED BY '\n' (%s)",
-            $escaped,
+            'INSERT INTO %s (%s) VALUES %s',
             $table,
-            $columns
+            implode(', ', $columns),
+            $valuesClause
         );
-        $pdo->exec($sql);
-    }
 
-    private function writeSystemsCsv(string $path, string $now): string
-    {
-        $csvPath = $this->config->storagePath . '/systems.csv';
-        $handle = fopen($csvPath, 'w');
-        if ($handle === false) {
-            throw new RuntimeException('Unable to write systems csv');
-        }
-
-        foreach (SdeJsonlReader::read($path) as $row) {
-            $mapped = $this->mapSystemRow($row, $now);
-            $this->writeCsvRow($handle, [
-                $mapped['id'],
-                $mapped['name'],
-                $mapped['security'],
-                $mapped['region_id'],
-                $mapped['constellation_id'],
-                $mapped['x'],
-                $mapped['y'],
-                $mapped['z'],
-                $mapped['system_size_au'],
-                $mapped['updated_at'],
-            ]);
-        }
-
-        fclose($handle);
-        return $csvPath;
-    }
-
-    private function writeCsvRows(array $rows, array $columns): string
-    {
-        $csvPath = $this->config->storagePath . '/sde-' . bin2hex(random_bytes(4)) . '.csv';
-        $handle = fopen($csvPath, 'w');
-        if ($handle === false) {
-            throw new RuntimeException('Unable to write csv file');
-        }
-
+        $values = [];
         foreach ($rows as $row) {
-            $output = [];
             foreach ($columns as $column) {
-                $output[] = $row[$column] ?? null;
+                $values[] = $row[$column] ?? null;
             }
-            $this->writeCsvRow($handle, $output);
         }
 
-        fclose($handle);
-        return $csvPath;
+        try {
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($values);
+        } catch (\Throwable $e) {
+            throw new RuntimeException(sprintf('Failed inserting batch into %s.', $table), 0, $e);
+        }
     }
 
-    private function writeCsvRow($handle, array $row): void
+    private function report(?callable $progress, string $message): void
     {
-        $normalized = array_map(static fn ($value) => $value === null ? '\\N' : $value, $row);
-        fputcsv($handle, $normalized, ',', '"', '\\');
+        if ($progress !== null) {
+            $progress($message);
+        }
+    }
+
+    private function reportEvery(?callable $progress, string $label, int $count): void
+    {
+        if ($progress !== null && $count % self::PROGRESS_EVERY === 0) {
+            $progress(sprintf('<comment>%s processed: %d</comment>', $label, $count));
+        }
     }
 
     private function mapSystemRow(array $row, string $now): array
