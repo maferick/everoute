@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Everoute\Config\Env;
+use Everoute\Cache\RedisCache;
 use Everoute\DB\Connection;
 use Everoute\Http\ApiController;
 use Everoute\Http\ErrorHandler;
@@ -41,10 +42,13 @@ $dsn = sprintf(
 );
 $connection = new Connection($dsn, Env::get('DB_USER', ''), Env::get('DB_PASS', ''));
 
+$riskCache = RedisCache::fromEnv();
+$riskCacheTtl = Env::int('RISK_CACHE_TTL_SECONDS', 60);
+
 $systems = new SystemRepository($connection);
 $stargates = new StargateRepository($connection);
 $stations = new StationRepository($connection);
-$riskRepo = new RiskRepository($connection);
+$riskRepo = new RiskRepository($connection, $riskCache, $riskCacheTtl);
 
 $weightCalculator = new WeightCalculator();
 $movementRules = new MovementRules();

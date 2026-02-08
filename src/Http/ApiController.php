@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Everoute\Http;
 
+use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
 use Everoute\Routing\RouteService;
 use Everoute\Security\RateLimiter;
@@ -23,7 +24,26 @@ final class ApiController
 
     public function health(Request $request): Response
     {
-        return new JsonResponse(['status' => 'ok', 'time' => gmdate('c')]);
+        $riskUpdated = $this->risk->getLatestUpdate();
+        $ingestLastSeen = $this->risk->getIngestLastSeen();
+        $ingestRunning = null;
+        if ($ingestLastSeen !== null) {
+            try {
+                $lastSeen = new \DateTimeImmutable($ingestLastSeen);
+                $ingestRunning = (time() - $lastSeen->getTimestamp()) <= 120;
+            } catch (\Exception) {
+                $ingestRunning = null;
+            }
+        }
+
+        return new JsonResponse([
+            'status' => 'ok',
+            'time' => gmdate('c'),
+            'risk_provider' => Env::get('RISK_PROVIDER', 'manual'),
+            'risk_updated_at' => $riskUpdated,
+            'risk_ingest_last_seen' => $ingestLastSeen,
+            'risk_ingest_running' => $ingestRunning,
+        ]);
     }
 
     public function route(Request $request): Response

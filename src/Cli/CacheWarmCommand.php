@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace Everoute\Cli;
 
-use Everoute\DB\Connection;
+use Everoute\Cache\RedisCache;
+use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
 use Everoute\Routing\JumpPlanner;
 use Everoute\Routing\JumpRangeCalculator;
@@ -35,11 +36,13 @@ final class CacheWarmCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $connection = $this->connection();
+        $riskCache = RedisCache::fromEnv();
+        $riskCacheTtl = Env::int('RISK_CACHE_TTL_SECONDS', 60);
         $service = new RouteService(
             new SystemRepository($connection),
             new StargateRepository($connection),
             new StationRepository($connection),
-            new RiskRepository($connection),
+            new RiskRepository($connection, $riskCache, $riskCacheTtl),
             $weightCalculator = new WeightCalculator(),
             $movementRules = new MovementRules(),
             new JumpPlanner(new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php'), $weightCalculator, $movementRules),
