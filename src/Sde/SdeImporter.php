@@ -12,6 +12,7 @@ final class SdeImporter
 {
     private const DEFAULT_BATCH_SIZE = 1000;
     private const PROGRESS_EVERY = 5000;
+    private const METERS_PER_AU = 149_597_870_700.0;
 
     public function __construct(private Connection $connection)
     {
@@ -226,7 +227,7 @@ final class SdeImporter
         $destinations = [];
 
         foreach (SdeJsonlReader::read($path) as $row) {
-            $id = (int) ($row['stargateID'] ?? $row['id'] ?? 0);
+            $id = (int) ($row['stargateID'] ?? $row['id'] ?? $row['_key'] ?? 0);
             $fromSystem = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['system_id'] ?? 0);
             if ($id <= 0 || $fromSystem <= 0) {
                 continue;
@@ -291,7 +292,7 @@ final class SdeImporter
         $rows = [];
         $count = 0;
         foreach (SdeJsonlReader::read($path) as $row) {
-            $stationId = (int) ($row['stationID'] ?? $row['stationId'] ?? $row['id'] ?? 0);
+            $stationId = (int) ($row['stationID'] ?? $row['stationId'] ?? $row['id'] ?? $row['_key'] ?? 0);
             $systemId = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['system_id'] ?? 0);
             if ($stationId <= 0 || $systemId <= 0) {
                 continue;
@@ -419,15 +420,23 @@ final class SdeImporter
 
     private function mapSystemRow(array $row, string $now): array
     {
-        $id = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['id'] ?? 0);
+        $id = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['id'] ?? $row['_key'] ?? 0);
         $name = $this->normalizeName($row['solarSystemName'] ?? $row['name'] ?? null, 'Unknown');
         $security = (float) ($row['security'] ?? $row['securityStatus'] ?? 0.0);
         $regionId = $row['regionID'] ?? $row['regionId'] ?? $row['region_id'] ?? null;
         $constellationId = $row['constellationID'] ?? $row['constellationId'] ?? $row['constellation_id'] ?? null;
-        $x = (float) ($row['x'] ?? 0);
-        $y = (float) ($row['y'] ?? 0);
-        $z = (float) ($row['z'] ?? 0);
-        $systemSize = (float) ($row['systemSize'] ?? $row['system_size_au'] ?? 1.0);
+        $position = is_array($row['position'] ?? null) ? $row['position'] : [];
+        $x = (float) ($row['x'] ?? $position['x'] ?? 0);
+        $y = (float) ($row['y'] ?? $position['y'] ?? 0);
+        $z = (float) ($row['z'] ?? $position['z'] ?? 0);
+        $radius = (float) ($row['radius'] ?? 0);
+        $systemSize = (float) ($row['systemSize'] ?? $row['system_size_au'] ?? 0);
+        if ($systemSize <= 0 && $radius > 0) {
+            $systemSize = $radius / self::METERS_PER_AU;
+        }
+        if ($systemSize <= 0) {
+            $systemSize = 1.0;
+        }
 
         return [
             'id' => $id,
