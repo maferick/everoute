@@ -39,12 +39,12 @@ CREATE TABLE IF NOT EXISTS gate_distances (
 
 CREATE TABLE IF NOT EXISTS jump_neighbors (
     system_id BIGINT NOT NULL,
-    range_bucket SMALLINT UNSIGNED NOT NULL,
+    range_ly SMALLINT UNSIGNED NOT NULL,
     neighbor_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
     neighbor_ids_blob MEDIUMBLOB NOT NULL,
     updated_at DATETIME NOT NULL,
-    PRIMARY KEY (system_id, range_bucket),
-    INDEX idx_jump_neighbors_range (range_bucket),
+    PRIMARY KEY (system_id, range_ly),
+    INDEX idx_jump_neighbors_range (range_ly),
     CONSTRAINT fk_jump_neighbors_system FOREIGN KEY (system_id) REFERENCES systems (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

@@ -16,14 +16,14 @@ final class JumpNeighborRepository
     public function loadRangeBucket(int $rangeBucket, int $expectedSystems): ?array
     {
         $pdo = $this->connection->pdo();
-        $countStmt = $pdo->prepare('SELECT COUNT(*) FROM jump_neighbors WHERE range_bucket = :range');
+        $countStmt = $pdo->prepare('SELECT COUNT(*) FROM jump_neighbors WHERE range_ly = :range');
         $countStmt->execute(['range' => $rangeBucket]);
         $count = (int) $countStmt->fetchColumn();
         if ($count < $expectedSystems) {
             return null;
         }
 
-        $stmt = $pdo->prepare('SELECT system_id, neighbor_ids_blob FROM jump_neighbors WHERE range_bucket = :range');
+        $stmt = $pdo->prepare('SELECT system_id, neighbor_ids_blob FROM jump_neighbors WHERE range_ly = :range');
         $stmt->execute(['range' => $rangeBucket]);
         $neighbors = [];
         while ($row = $stmt->fetch()) {

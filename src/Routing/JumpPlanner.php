@@ -56,7 +56,12 @@ final class JumpPlanner
             $bucketIndex = $this->neighborBuilder->buildSpatialBuckets($systems, $rangeMeters);
             $neighbors = [];
             foreach ($systems as $id => $system) {
-                $neighbors[$id] = $this->neighborBuilder->buildNeighborsForSystem($system, $systems, $bucketIndex, $rangeMeters);
+                $neighbors[$id] = $this->capNeighbors(
+                    $this->neighborBuilder->buildNeighborsForSystem($system, $systems, $bucketIndex, $rangeMeters),
+                    $this->rangeCalculator->neighborCapPerSystem(),
+                    $id,
+                    (int) $rangeLy
+                );
             }
             $this->jumpNeighbors[$rangeLy] = $neighbors;
         }
@@ -66,6 +71,25 @@ final class JumpPlanner
             'range_buckets' => count($this->jumpRangeBuckets),
             'systems' => count($systems),
         ]);
+    }
+
+    /** @param array<int, float> $neighbors */
+    private function capNeighbors(array $neighbors, int $cap, int $systemId, int $rangeLy): array
+    {
+        $count = count($neighbors);
+        if ($count <= $cap) {
+            return $neighbors;
+        }
+
+        $this->logger->warning('Capping jump neighbors for system', [
+            'system_id' => $systemId,
+            'range_ly' => $rangeLy,
+            'neighbor_count' => $count,
+            'cap' => $cap,
+        ]);
+
+        asort($neighbors, SORT_NUMERIC);
+        return array_slice($neighbors, 0, $cap, true);
     }
 
     public function plan(
