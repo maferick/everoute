@@ -23,10 +23,14 @@ final class ChokepointSeeder
         }
 
         $lookupStmt = $pdo->prepare('SELECT id FROM systems WHERE LOWER(name) = LOWER(:name) LIMIT 1');
-        $upsertStmt = $pdo->prepare(
-            'INSERT INTO chokepoints (system_id, reason, category, is_active, created_at, updated_at)
-             VALUES (:system_id, :reason, :category, :is_active, :created_at, :updated_at)
-             ON DUPLICATE KEY UPDATE reason = VALUES(reason), category = VALUES(category), is_active = VALUES(is_active), updated_at = VALUES(updated_at)'
+        $hasCategory = $this->columnExists($pdo, 'chokepoints', 'category');
+        $upsertStmt = $pdo->prepare($hasCategory
+            ? 'INSERT INTO chokepoints (system_id, reason, category, is_active, created_at, updated_at)
+               VALUES (:system_id, :reason, :category, :is_active, :created_at, :updated_at)
+               ON DUPLICATE KEY UPDATE reason = VALUES(reason), category = VALUES(category), is_active = VALUES(is_active), updated_at = VALUES(updated_at)'
+            : 'INSERT INTO chokepoints (system_id, reason, is_active, created_at, updated_at)
+               VALUES (:system_id, :reason, :is_active, :created_at, :updated_at)
+               ON DUPLICATE KEY UPDATE reason = VALUES(reason), is_active = VALUES(is_active), updated_at = VALUES(updated_at)'
         );
 
         $now = (new DateTimeImmutable())->format('Y-m-d H:i:s');
@@ -50,14 +54,19 @@ final class ChokepointSeeder
                 continue;
             }
 
-            $upsertStmt->execute([
+            $params = [
                 ':system_id' => (int) $systemId,
                 ':reason' => $item['reason'] ?? null,
-                ':category' => $item['category'] ?? null,
                 ':is_active' => isset($item['is_active']) ? (int) (bool) $item['is_active'] : 1,
                 ':created_at' => $now,
                 ':updated_at' => $now,
-            ]);
+            ];
+
+            if ($hasCategory) {
+                $params[':category'] = $item['category'] ?? null;
+            }
+
+            $upsertStmt->execute($params);
             $seeded++;
         }
 
@@ -65,5 +74,21 @@ final class ChokepointSeeder
             'seeded' => $seeded,
             'missing' => $missing,
         ];
+    }
+
+    private function columnExists(PDO $pdo, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare(
+            'SELECT COUNT(*) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+             AND TABLE_NAME = :table
+             AND COLUMN_NAME = :column'
+        );
+        $stmt->execute([
+            ':table' => $table,
+            ':column' => $column,
+        ]);
+
+        return (int) $stmt->fetchColumn() > 0;
     }
 }

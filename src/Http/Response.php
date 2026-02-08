@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Everoute\Http;
 
-final class Response
+class Response
 {
     public int $status;
     public array $headers;
