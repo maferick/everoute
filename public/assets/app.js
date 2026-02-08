@@ -12,3 +12,18 @@ document.querySelectorAll('[data-tabs]').forEach((tabGroup) => {
         });
     });
 });
+
+const modeSelect = document.querySelector('select[name="mode"]');
+const capitalFields = document.querySelectorAll('.capital-only');
+
+const updateCapitalFields = () => {
+    const isCapital = modeSelect && modeSelect.value === 'capital';
+    capitalFields.forEach((field) => {
+        field.style.display = isCapital ? '' : 'none';
+    });
+};
+
+if (modeSelect) {
+    modeSelect.addEventListener('change', updateCapitalFields);
+    updateCapitalFields();
+}

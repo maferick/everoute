@@ -48,10 +48,35 @@ $tabs = [
                     Ship Class
                     <select name="ship_class">
                         <?php
-                        $classes = ['interceptor', 'subcap', 'dst', 'freighter', 'capital', 'jump_freighter'];
+                        $classes = ['interceptor', 'subcap', 'dst', 'freighter', 'capital', 'jump_freighter', 'super', 'titan'];
                         foreach ($classes as $class) {
                             $selected = (($_POST['ship_class'] ?? 'subcap') === $class) ? 'selected' : '';
                             echo "<option value=\"{$class}\" {$selected}>{$class}</option>";
+                        }
+                        ?>
+                    </select>
+                </label>
+                <label class="capital-only">
+                    Jump Ship Type
+                    <select name="jump_ship_type">
+                        <?php
+                        $jumpTypes = ['carrier', 'dread', 'fax', 'jump_freighter', 'supercarrier', 'titan'];
+                        $selectedType = $_POST['jump_ship_type'] ?? '';
+                        foreach ($jumpTypes as $type) {
+                            $selected = ($selectedType === $type) ? 'selected' : '';
+                            echo "<option value=\"{$type}\" {$selected}>{$type}</option>";
+                        }
+                        ?>
+                    </select>
+                </label>
+                <label class="capital-only">
+                    Jump Range Skill Level
+                    <select name="jump_skill_level">
+                        <?php
+                        $selectedLevel = $_POST['jump_skill_level'] ?? '4';
+                        for ($level = 0; $level <= 5; $level++) {
+                            $selected = ((string) $level === (string) $selectedLevel) ? 'selected' : '';
+                            echo "<option value=\"{$level}\" {$selected}>{$level}</option>";
                         }
                         ?>
                     </select>
@@ -94,12 +119,47 @@ $tabs = [
                                 <div>Risk score: <?= $route['risk_score'] ?></div>
                                 <div>Travel proxy: <?= $route['travel_time_proxy'] ?>s</div>
                             </div>
+                            <?php if (!empty($route['rules'])): ?>
+                                <h3>Feasibility &amp; Rules</h3>
+                                <ul>
+                                    <?php foreach (($route['rules']['constraints'] ?? []) as $constraint): ?>
+                                        <li><?= htmlspecialchars($constraint, ENT_QUOTES) ?></li>
+                                    <?php endforeach; ?>
+                                    <?php if (!empty($route['rules']['jump'])): ?>
+                                        <li>Jump cooldown estimate: <?= htmlspecialchars((string) ($route['rules']['jump']['cooldown_minutes_estimate'] ?? 'n/a'), ENT_QUOTES) ?> min</li>
+                                        <li>Jump fatigue risk: <?= htmlspecialchars((string) ($route['rules']['jump']['fatigue_risk'] ?? 'n/a'), ENT_QUOTES) ?></li>
+                                    <?php endif; ?>
+                                </ul>
+                            <?php endif; ?>
                             <h3>Why this route?</h3>
                             <ul>
                                 <li>Top risk systems: <?= htmlspecialchars(implode(', ', array_map(static fn ($r) => $r['name'], $route['why']['top_risk_systems'] ?? [])), ENT_QUOTES) ?></li>
                                 <li>Avoided hotspots: <?= htmlspecialchars(implode(', ', $route['why']['avoided_hotspots'] ?? []), ENT_QUOTES) ?></li>
                                 <li>Tradeoffs: <?= htmlspecialchars(json_encode($route['why']['key_tradeoffs'] ?? []), ENT_QUOTES) ?></li>
                             </ul>
+                            <?php if (!empty($route['plans'])): ?>
+                                <h3>Gate vs Jump (Capital/JF)</h3>
+                                <div class="stats">
+                                    <div>Gate time: <?= htmlspecialchars((string) ($route['plans']['gate']['estimated_time_s'] ?? 'n/a'), ENT_QUOTES) ?>s</div>
+                                    <div>Gate exposure: <?= htmlspecialchars((string) ($route['plans']['gate']['exposure_score'] ?? 'n/a'), ENT_QUOTES) ?></div>
+                                    <div>Gate risk: <?= htmlspecialchars((string) ($route['plans']['gate']['risk_score'] ?? 'n/a'), ENT_QUOTES) ?></div>
+                                </div>
+                                <?php if (!empty($route['plans']['jump'])): ?>
+                                    <?php if (!empty($route['plans']['jump']['feasible'])): ?>
+                                        <div class="stats">
+                                            <div>Jump time: <?= htmlspecialchars((string) ($route['plans']['jump']['estimated_time_s'] ?? 'n/a'), ENT_QUOTES) ?>s</div>
+                                            <div>Jump range: <?= htmlspecialchars((string) ($route['plans']['jump']['effective_jump_range_ly'] ?? 'n/a'), ENT_QUOTES) ?> LY</div>
+                                            <div>Jump exposure: <?= htmlspecialchars((string) ($route['plans']['jump']['exposure_score'] ?? 'n/a'), ENT_QUOTES) ?></div>
+                                            <div>Jump risk: <?= htmlspecialchars((string) ($route['plans']['jump']['risk_score'] ?? 'n/a'), ENT_QUOTES) ?></div>
+                                        </div>
+                                        <?php if (!empty($route['plans']['jump']['midpoints'])): ?>
+                                            <p>Jump midpoints: <?= htmlspecialchars(implode(', ', $route['plans']['jump']['midpoints']), ENT_QUOTES) ?></p>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <p class="error">Jump plan not feasible: <?= htmlspecialchars((string) ($route['plans']['jump']['reason'] ?? 'Unknown reason'), ENT_QUOTES) ?></p>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+                            <?php endif; ?>
                             <h3>Route</h3>
                             <ol>
                                 <?php foreach ($route['systems'] as $system): ?>
@@ -128,6 +188,9 @@ $tabs = [
             </div>
         <?php elseif ($result && !empty($result['error'])): ?>
             <p class="error">Error: <?= htmlspecialchars($result['error'], ENT_QUOTES) ?></p>
+            <?php if (!empty($result['reason'])): ?>
+                <p class="error"><?= htmlspecialchars((string) $result['reason'], ENT_QUOTES) ?></p>
+            <?php endif; ?>
         <?php else: ?>
             <p class="muted">Submit a route request to see results.</p>
         <?php endif; ?>
