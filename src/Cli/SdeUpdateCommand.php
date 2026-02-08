@@ -33,7 +33,7 @@ final class SdeUpdateCommand extends Command
         $http = new SdeHttpClient($config);
         $downloader = new SdeDownloader($config, $storage, $http);
         $meta = new SdeMetaRepository($this->connection());
-        $importer = new SdeImporter($this->connection(), $config);
+        $importer = new SdeImporter($this->connection());
 
         $latest = $downloader->fetchLatestBuildNumber();
         $current = $meta->currentBuildNumber();
@@ -48,7 +48,7 @@ final class SdeUpdateCommand extends Command
         $zipPath = $downloader->downloadZip($latest);
         $paths = $downloader->extractRequiredFiles($zipPath, $latest);
 
-        $importer->import($paths, $latest);
+        $importer->import($paths, $latest, static fn (string $message) => $output->writeln($message));
         $meta->recordInstall($latest, $config->variant, $downloader->buildUrl($latest), 'full reimport');
 
         $output->writeln('<info>SDE update complete.</info>');
