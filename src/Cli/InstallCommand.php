@@ -65,8 +65,8 @@ final class InstallCommand extends Command
             $dbNameSafe = str_replace('`', '``', $dbName);
             $appUserSafe = str_replace('`', '``', $appUser);
             $appPassSafe = $adminPdo->quote($appPass);
-            $adminPdo->exec(\"CREATE DATABASE IF NOT EXISTS `{$dbNameSafe}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci\");
-            $adminPdo->exec(\"CREATE USER IF NOT EXISTS `{$appUserSafe}`@'%' IDENTIFIED BY {$appPassSafe}\");
+            $adminPdo->exec("CREATE DATABASE IF NOT EXISTS `{$dbNameSafe}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+            $adminPdo->exec("CREATE USER IF NOT EXISTS `{$appUserSafe}`@'%' IDENTIFIED BY {$appPassSafe}");
 
             $grants = str_replace(['{{db_name}}', '{{app_user}}'], [$dbNameSafe, $appUserSafe], $this->loadSql('sql/grants.sql'));
             $adminPdo->exec($grants);
