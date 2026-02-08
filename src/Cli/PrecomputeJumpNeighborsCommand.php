@@ -47,6 +47,8 @@ final class PrecomputeJumpNeighborsCommand extends Command
         $checkpointRepo = new PrecomputeCheckpointRepository($connection);
         $rangeCalculator = new JumpRangeCalculator(__DIR__ . '/../../config/jump_ranges.php');
         $ranges = $this->parseRanges($rangeOption, $rangeCalculator->rangeBuckets());
+        $neighborCap = $rangeCalculator->neighborCapPerSystem();
+        $storageWarningBytes = $rangeCalculator->neighborStorageWarningBytes();
         if ($ranges === []) {
             $output->writeln('<error>No jump ranges specified.</error>');
             return Command::FAILURE;
@@ -62,12 +64,15 @@ final class PrecomputeJumpNeighborsCommand extends Command
 
         $builder = new JumpNeighborGraphBuilder();
         $startedAt = microtime(true);
+        $totalStoredBytes = 0;
+
+        $this->purgeUnsupportedRanges($output, $pdo, max($ranges));
 
         foreach ($ranges as $rangeLy) {
             $jobKey = 'jump_neighbors:' . $rangeLy;
             if (!$resume) {
                 $output->writeln(sprintf('<comment>Clearing jump_neighbors for %d LY...</comment>', $rangeLy));
-                $stmt = $pdo->prepare('DELETE FROM jump_neighbors WHERE range_bucket = :range');
+                $stmt = $pdo->prepare('DELETE FROM jump_neighbors WHERE range_ly = :range');
                 $stmt->execute(['range' => $rangeLy]);
                 $checkpointRepo->clear($jobKey);
             }
@@ -86,16 +91,27 @@ final class PrecomputeJumpNeighborsCommand extends Command
 
                 $system = $systems[$systemId];
                 $neighbors = $builder->buildNeighborsForSystem($system, $systems, $bucketIndex, $rangeMeters);
+                $neighbors = $this->capNeighbors($neighbors, $neighborCap, $output, $systemId, $rangeLy);
                 $payload = gzcompress(json_encode($neighbors, JSON_THROW_ON_ERROR));
+                $payloadBytes = is_string($payload) ? strlen($payload) : 0;
+                $totalStoredBytes += $payloadBytes;
+                if ($storageWarningBytes > 0 && $totalStoredBytes >= $storageWarningBytes) {
+                    $output->writeln(sprintf(
+                        '<comment>Total neighbor storage crossed %s bytes (current: %s bytes).</comment>',
+                        number_format($storageWarningBytes),
+                        number_format($totalStoredBytes)
+                    ));
+                    $storageWarningBytes = 0;
+                }
 
                 $stmt = $pdo->prepare(
-                    'INSERT INTO jump_neighbors (system_id, range_bucket, neighbor_count, neighbor_ids_blob, updated_at)
-                    VALUES (:system_id, :range_bucket, :neighbor_count, :payload, NOW())
+                    'INSERT INTO jump_neighbors (system_id, range_ly, neighbor_count, neighbor_ids_blob, updated_at)
+                    VALUES (:system_id, :range_ly, :neighbor_count, :payload, NOW())
                     ON DUPLICATE KEY UPDATE neighbor_count = VALUES(neighbor_count), neighbor_ids_blob = VALUES(neighbor_ids_blob), updated_at = VALUES(updated_at)'
                 );
                 $stmt->execute([
                     'system_id' => $systemId,
-                    'range_bucket' => $rangeLy,
+                    'range_ly' => $rangeLy,
                     'neighbor_count' => count($neighbors),
                     'payload' => $payload,
                 ]);
@@ -152,8 +168,43 @@ final class PrecomputeJumpNeighborsCommand extends Command
             }
         }
         $ranges = array_values(array_unique($ranges));
+        $ranges = array_filter($ranges, static fn (int $range): bool => $range >= 1 && $range <= 10);
         sort($ranges);
         return $ranges;
+    }
+
+    /** @param array<int, float> $neighbors */
+    private function capNeighbors(array $neighbors, int $cap, OutputInterface $output, int $systemId, int $rangeLy): array
+    {
+        $count = count($neighbors);
+        if ($count <= $cap) {
+            return $neighbors;
+        }
+
+        $output->writeln(sprintf(
+            '<comment>Warning: system %d has %d neighbors at %d LY; capping to %d.</comment>',
+            $systemId,
+            $count,
+            $rangeLy,
+            $cap
+        ));
+
+        asort($neighbors, SORT_NUMERIC);
+        return array_slice($neighbors, 0, $cap, true);
+    }
+
+    private function purgeUnsupportedRanges(OutputInterface $output, \PDO $pdo, int $maxRange): void
+    {
+        $stmt = $pdo->prepare('DELETE FROM jump_neighbors WHERE range_ly > :max_range');
+        $stmt->execute(['max_range' => $maxRange]);
+        $removed = $stmt->rowCount();
+        if ($removed > 0) {
+            $output->writeln(sprintf(
+                '<comment>Removed %d precomputed jump neighbor rows above %d LY.</comment>',
+                $removed,
+                $maxRange
+            ));
+        }
     }
 
     private function reportProgress(OutputInterface $output, int $processed, int $total, float $startedAt, string $label): void
