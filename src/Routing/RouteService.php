@@ -249,7 +249,7 @@ final class RouteService
         usort($topRisk, static fn ($a, $b) => $b['score'] <=> $a['score']);
         $topRisk = array_slice($topRisk, 0, 5);
 
-        $fastest = $this->computeFastestPath($startId, $endId);
+        $fastest = $this->computeFastestPath($startId, $endId, $options);
         $avoided = [];
         if (!empty($fastest)) {
             $fastSet = array_fill_keys($fastest, true);
@@ -273,21 +273,32 @@ final class RouteService
         ];
     }
 
-    private function computeFastestPath(int $startId, int $endId): array
+    private function computeFastestPath(int $startId, int $endId, array $options): array
     {
         $astar = new AStar();
         $corridor = $this->buildCorridorSet($startId, $endId);
+        $avoidLow = $options['avoid_lowsec'] ?? false;
+        $avoidNull = $options['avoid_nullsec'] ?? false;
+        $avoidSystems = $options['avoid_systems'] ?? [];
+        $avoidSet = array_fill_keys($avoidSystems, true);
+        $allowFn = function (int $node) use ($options, $avoidLow, $avoidNull, $avoidSet): bool {
+            $system = $this->systems[$node] ?? null;
+            return $system !== null && $this->isGateSystemAllowed($system, $options, $avoidLow, $avoidNull, $avoidSet);
+        };
         $heuristic = function (int $node) use ($endId): float {
             return JumpMath::distanceLy($this->systems[$node], $this->systems[$endId]);
         };
+        [$maxNodes, $maxSeconds] = $this->fastestSearchLimits();
         $result = $astar->shortestPath(
             $this->gateNeighbors,
             $startId,
             $endId,
             static fn () => 1.0,
             $heuristic,
-            null,
-            $corridor
+            $allowFn,
+            $corridor,
+            $maxNodes,
+            $maxSeconds
         );
         return $result['path'] ?? [];
     }
@@ -391,6 +402,7 @@ final class RouteService
             $system = $this->systems[$node] ?? null;
             return $system !== null && $this->isGateSystemAllowed($system, $options, $avoidLow, $avoidNull, $avoidSet);
         };
+        [$maxNodes, $maxSeconds] = $this->gateSearchLimits();
 
         return $astar->shortestPath(
             $this->gateNeighbors,
@@ -399,7 +411,9 @@ final class RouteService
             $costFn,
             $heuristic,
             $allowFn,
-            $corridor
+            $corridor,
+            $maxNodes,
+            $maxSeconds
         );
     }
 
@@ -485,11 +499,20 @@ final class RouteService
         $avoidNull = $options['avoid_nullsec'] ?? false;
         $avoidSystems = $options['avoid_systems'] ?? [];
         $avoidSet = array_fill_keys($avoidSystems, true);
+        $jumpHighSecRestricted = $this->rules->isCapitalRestricted($options)
+            || (($options['jump_ship_type'] ?? '') === 'jump_freighter');
 
         $maxLaunch = \Everoute\Config\Env::int('HYBRID_LAUNCH_MAX_GATES', 6);
+        $maxLanding = \Everoute\Config\Env::int('HYBRID_LANDING_MAX_GATES', 6);
         $launchCandidates = $this->findGateCandidates($startId, $maxLaunch, $options, $avoidLow, $avoidNull, $avoidSet);
         $launchCandidates[$startId] = ['hops' => 0, 'used_regional_gate' => false];
-        if ($launchCandidates === []) {
+        $landingCandidates = $this->findGateCandidates($endId, $maxLanding, $options, $avoidLow, $avoidNull, $avoidSet, true);
+        $landingCandidates[$endId] = ['hops' => 0, 'used_regional_gate' => false];
+
+        $launchList = $this->selectHybridCandidates($launchCandidates, $endId, $jumpHighSecRestricted, true);
+        $landingList = $this->selectHybridCandidates($landingCandidates, $endId, $jumpHighSecRestricted, false);
+
+        if ($launchList === []) {
             return [
                 'feasible' => false,
                 'reason' => $avoidLow || $avoidNull
@@ -500,12 +523,24 @@ final class RouteService
             ];
         }
 
+        if ($landingList === []) {
+            return [
+                'feasible' => false,
+                'reason' => $avoidLow || $avoidNull
+                    ? 'Hybrid planning could not find a landing system within the configured gate hop limit. Avoid low/null-sec settings may be too restrictive for capital repositioning.'
+                    : 'No landing systems available within the configured gate hop limit.',
+                'gate_segment' => [],
+                'jump_segment' => [],
+            ];
+        }
+
         $end = $this->systems[$endId];
         $best = null;
         $topCandidates = [];
         $candidatesEvaluated = 0;
 
-        foreach ($launchCandidates as $launchId => $launchMeta) {
+        foreach ($launchList as $launchCandidate) {
+            $launchId = $launchCandidate['id'];
             $gatePathToLaunch = $this->computeGatePath($startId, $launchId, $options, $weights, $avoidLow, $avoidNull, $avoidSet);
             if ($gatePathToLaunch['path'] === []) {
                 continue;
@@ -517,98 +552,135 @@ final class RouteService
                 continue;
             }
 
-            $distanceLy = $this->distanceLy($launchSystem, $end);
-            $riskScore = ($this->risk[$launchId]['kills_last_24h'] ?? 0) + ($this->risk[$launchId]['pod_kills_last_24h'] ?? 0);
-            $hasNpc = !empty($launchSystem['has_npc_station']);
-            $candidateScore = ($distanceLy * 10) + ($riskScore * 2) + ($hasNpc ? -8 : 6) + ($launchRegional ? -15 : 0);
+            foreach ($landingList as $landingCandidate) {
+                $landingId = $landingCandidate['id'];
+                $landingSystem = $this->systems[$landingId] ?? null;
+                if ($landingSystem === null) {
+                    continue;
+                }
 
-            $npcStationIds = $this->npcStationIdsFromPath($gatePathToLaunch['path']);
-            $candidatesEvaluated++;
-            $jumpPlan = $this->jumpPlanner->plan(
-                $launchId,
-                $endId,
-                $this->systems,
-                $this->risk,
-                $options,
-                $npcStationIds,
-                $gatePathToLaunch['path']
-            );
-            if (empty($jumpPlan['feasible'])) {
-                continue;
-            }
+                if ($jumpHighSecRestricted && $this->rules->isHighSec($landingSystem)) {
+                    continue;
+                }
 
-            $jumpTravel = (float) ($jumpPlan['jump_travel_time_s'] ?? $jumpPlan['estimated_time_s'] ?? 0.0);
-            $cooldownMinutes = (float) ($jumpPlan['jump_cooldown_total_minutes'] ?? 0.0);
-            $totalTime = $gateSummary['travel_time_proxy']
-                + $jumpTravel
-                + ($cooldownMinutes * 60);
+                $landingPath = [];
+                $landingSummary = null;
+                $landingRegional = false;
+                if ($landingId !== $endId) {
+                    $landingPathResult = $this->computeGatePath($landingId, $endId, $options, $weights, $avoidLow, $avoidNull, $avoidSet);
+                    if ($landingPathResult['path'] === []) {
+                        continue;
+                    }
+                    $landingPath = $landingPathResult['path'];
+                    $landingSummary = $this->summarizeRoute($landingPath, $options);
+                    $landingRegional = $this->pathHasRegionalGate($landingPath);
+                }
 
-            $riskScores = array_filter([
-                $gateSummary['risk_score'] ?? null,
-                $jumpPlan['risk_score'] ?? null,
-            ], static fn ($value) => $value !== null);
-            $totalRisk = $riskScores !== []
-                ? round(array_sum($riskScores) / count($riskScores), 2)
-                : 0.0;
-            $totalExposure = round(
-                ($gateSummary['exposure_score'] ?? 0)
-                + ($jumpPlan['exposure_score'] ?? 0),
-                2
-            );
+                $npcStationIds = array_merge(
+                    $this->npcStationIdsFromPath($gatePathToLaunch['path']),
+                    $landingPath === [] ? [] : $this->npcStationIdsFromPath($landingPath)
+                );
+                $candidatesEvaluated++;
+                $jumpPlan = $this->jumpPlanner->plan(
+                    $launchId,
+                    $landingId,
+                    $this->systems,
+                    $this->risk,
+                    $options,
+                    $npcStationIds,
+                    $gatePathToLaunch['path']
+                );
+                if (empty($jumpPlan['feasible'])) {
+                    continue;
+                }
 
-            $selectionScore = $totalTime + ($totalRisk * 8) + ($totalExposure * 2) + ($launchRegional ? -120 : 0);
+                $jumpTravel = (float) ($jumpPlan['jump_travel_time_s'] ?? $jumpPlan['estimated_time_s'] ?? 0.0);
+                $cooldownMinutes = (float) ($jumpPlan['jump_cooldown_total_minutes'] ?? 0.0);
+                $landingTime = $landingSummary['travel_time_proxy'] ?? 0.0;
+                $totalTime = $gateSummary['travel_time_proxy']
+                    + $jumpTravel
+                    + ($cooldownMinutes * 60)
+                    + $landingTime;
 
-            $payload = [
-                'feasible' => true,
-                'total_time_s' => round($totalTime, 1),
-                'total_risk_score' => $totalRisk,
-                'total_exposure_score' => $totalExposure,
-                'launch_system' => [
+                $riskScores = array_filter([
+                    $gateSummary['risk_score'] ?? null,
+                    $jumpPlan['risk_score'] ?? null,
+                    $landingSummary['risk_score'] ?? null,
+                ], static fn ($value) => $value !== null);
+                $totalRisk = $riskScores !== []
+                    ? round(array_sum($riskScores) / count($riskScores), 2)
+                    : 0.0;
+                $totalExposure = round(
+                    ($gateSummary['exposure_score'] ?? 0)
+                    + ($jumpPlan['exposure_score'] ?? 0)
+                    + ($landingSummary['exposure_score'] ?? 0),
+                    2
+                );
+
+                $selectionScore = $totalTime
+                    + ($totalRisk * 8)
+                    + ($totalExposure * 2)
+                    + ($launchRegional ? -120 : 0)
+                    + ($landingRegional ? -40 : 0);
+
+                $payload = [
+                    'feasible' => true,
+                    'total_time_s' => round($totalTime, 1),
+                    'total_risk_score' => $totalRisk,
+                    'total_exposure_score' => $totalExposure,
+                    'launch_system' => [
+                        'id' => $launchId,
+                        'name' => $launchSystem['name'],
+                        'gate_hops' => $gateSummary['total_gates'],
+                        'used_regional_gate' => $launchRegional,
+                        'npc_station' => !empty($launchSystem['has_npc_station']),
+                    ],
+                    'landing_system' => [
+                        'id' => $landingId,
+                        'name' => $landingSystem['name'],
+                        'gate_hops_to_destination' => $landingSummary['total_gates'] ?? 0,
+                        'npc_station' => !empty($landingSystem['has_npc_station']),
+                        'used_regional_gate' => $landingRegional,
+                    ],
+                    'gate_segment' => [
+                        'systems' => array_map(fn ($id) => $this->systems[$id]['name'], $gatePathToLaunch['path']),
+                        'estimated_time_s' => $gateSummary['travel_time_proxy'],
+                        'risk_score' => $gateSummary['risk_score'],
+                        'exposure_score' => $gateSummary['exposure_score'],
+                        'total_gates' => $gateSummary['total_gates'],
+                    ],
+                    'jump_segment' => [
+                        'jump_hops_count' => $jumpPlan['jump_hops_count'] ?? $jumpPlan['total_jumps'] ?? 0,
+                        'jump_total_ly' => $jumpPlan['jump_total_ly'] ?? null,
+                        'jump_segments' => $jumpPlan['jump_segments'] ?? $jumpPlan['segments'] ?? [],
+                        'jump_cooldown_total_minutes' => $jumpPlan['jump_cooldown_total_minutes'] ?? null,
+                        'jump_fatigue_estimate_minutes' => $jumpPlan['jump_fatigue_estimate_minutes'] ?? null,
+                        'jump_fatigue_risk_label' => $jumpPlan['jump_fatigue_risk_label'] ?? null,
+                    ],
+                    'landing_gate_segment' => $landingPath === [] ? null : [
+                        'systems' => array_map(fn ($id) => $this->systems[$id]['name'], $landingPath),
+                        'estimated_time_s' => $landingSummary['travel_time_proxy'] ?? 0,
+                        'risk_score' => $landingSummary['risk_score'] ?? 0,
+                        'exposure_score' => $landingSummary['exposure_score'] ?? 0,
+                        'total_gates' => $landingSummary['total_gates'] ?? 0,
+                    ],
+                    'score' => round($selectionScore, 2),
+                    'candidates_evaluated' => $candidatesEvaluated,
+                ];
+
+                $topCandidates[] = [
                     'id' => $launchId,
                     'name' => $launchSystem['name'],
-                    'gate_hops' => $gateSummary['total_gates'],
+                    'distance_to_destination_ly' => $launchCandidate['distance_to_target_ly'],
+                    'risk_score' => $launchCandidate['risk_score'],
+                    'npc_station' => !empty($launchSystem['has_npc_station']),
                     'used_regional_gate' => $launchRegional,
-                    'npc_station' => $hasNpc,
-                ],
-                'landing_system' => [
-                    'id' => $endId,
-                    'name' => $end['name'],
-                    'gate_hops_to_destination' => 0,
-                    'npc_station' => !empty($end['has_npc_station']),
-                ],
-                'gate_segment' => [
-                    'systems' => array_map(fn ($id) => $this->systems[$id]['name'], $gatePathToLaunch['path']),
-                    'estimated_time_s' => $gateSummary['travel_time_proxy'],
-                    'risk_score' => $gateSummary['risk_score'],
-                    'exposure_score' => $gateSummary['exposure_score'],
-                    'total_gates' => $gateSummary['total_gates'],
-                ],
-                'jump_segment' => [
-                    'jump_hops_count' => $jumpPlan['jump_hops_count'] ?? $jumpPlan['total_jumps'] ?? 0,
-                    'jump_total_ly' => $jumpPlan['jump_total_ly'] ?? null,
-                    'jump_segments' => $jumpPlan['jump_segments'] ?? $jumpPlan['segments'] ?? [],
-                    'jump_cooldown_total_minutes' => $jumpPlan['jump_cooldown_total_minutes'] ?? null,
-                    'jump_fatigue_estimate_minutes' => $jumpPlan['jump_fatigue_estimate_minutes'] ?? null,
-                    'jump_fatigue_risk_label' => $jumpPlan['jump_fatigue_risk_label'] ?? null,
-                ],
-                'landing_gate_segment' => null,
-                'score' => round($selectionScore, 2),
-                'candidates_evaluated' => $candidatesEvaluated,
-            ];
+                    'score' => $launchCandidate['score'],
+                ];
 
-            $payload['launch_score'] = round($candidateScore, 2);
-            $topCandidates[] = [
-                'id' => $launchId,
-                'name' => $launchSystem['name'],
-                'distance_to_destination_ly' => round($distanceLy, 2),
-                'risk_score' => $riskScore,
-                'npc_station' => $hasNpc,
-                'used_regional_gate' => $launchRegional,
-                'score' => round($candidateScore, 2),
-            ];
-
-            if ($best === null || $payload['score'] < $best['score']) {
-                $best = $payload;
+                if ($best === null || $payload['score'] < $best['score']) {
+                    $best = $payload;
+                }
             }
         }
 
@@ -638,6 +710,9 @@ final class RouteService
         $reasons = [];
         if (!empty($hybridPlan['launch_system']['used_regional_gate'])) {
             $reasons[] = 'Gated across region boundary to reposition.';
+        }
+        if (!empty($hybridPlan['landing_gate_segment'])) {
+            $reasons[] = 'Used a final gate segment to reach the destination after the last jump.';
         }
 
         $jumpOnlyCount = (int) ($jumpOnlyPlan['jump_hops_count'] ?? $jumpOnlyPlan['total_jumps'] ?? 0);
@@ -727,6 +802,22 @@ final class RouteService
         $this->jumpPlanner->preloadJumpGraphs($this->systems);
 
         $this->logger->info('Route data loaded', ['systems' => count($this->systems), 'risk' => count($this->risk)]);
+    }
+
+    /** @return array{0:int,1:float} */
+    private function gateSearchLimits(): array
+    {
+        $maxNodes = Env::int('ROUTE_MAX_NODES', 1500);
+        $maxMs = Env::int('ROUTE_MAX_MS', 300);
+        return [max(100, $maxNodes), max(50, $maxMs) / 1000];
+    }
+
+    /** @return array{0:int,1:float} */
+    private function fastestSearchLimits(): array
+    {
+        $maxNodes = Env::int('FASTEST_MAX_NODES', 1200);
+        $maxMs = Env::int('FASTEST_MAX_MS', 200);
+        return [max(100, $maxNodes), max(50, $maxMs) / 1000];
     }
 
     /** @return array<int, bool> */
@@ -821,5 +912,53 @@ final class RouteService
             }
         }
         return $ids;
+    }
+
+    /**
+     * @param array<int, array{hops:int,used_regional_gate:bool}> $candidates
+     * @return array<int, array{id:int,score:float,distance_to_target_ly:float,risk_score:int,hops:int}>
+     */
+    private function selectHybridCandidates(array $candidates, int $targetId, bool $jumpHighSecRestricted, bool $isLaunch): array
+    {
+        if ($candidates === []) {
+            return [];
+        }
+
+        $maxCandidates = Env::int(
+            $isLaunch ? 'HYBRID_MAX_LAUNCH_CANDIDATES' : 'HYBRID_MAX_LANDING_CANDIDATES',
+            25
+        );
+        $target = $this->systems[$targetId] ?? null;
+        if ($target === null) {
+            return [];
+        }
+
+        $scored = [];
+        foreach ($candidates as $systemId => $meta) {
+            $system = $this->systems[$systemId] ?? null;
+            if ($system === null) {
+                continue;
+            }
+            if ($jumpHighSecRestricted && $this->rules->isHighSec($system)) {
+                continue;
+            }
+            $distanceLy = $this->distanceLy($system, $target);
+            $riskScore = (int) (($this->risk[$systemId]['kills_last_24h'] ?? 0) + ($this->risk[$systemId]['pod_kills_last_24h'] ?? 0));
+            $hasNpc = !empty($system['has_npc_station']);
+            $regionalBonus = !empty($meta['used_regional_gate']) ? -12 : 0;
+            $npcBonus = $hasNpc ? -8 : 4;
+            $score = ($distanceLy * 10) + ($riskScore * 2) + ($meta['hops'] * 5) + $npcBonus + $regionalBonus;
+
+            $scored[] = [
+                'id' => (int) $systemId,
+                'score' => round($score, 2),
+                'distance_to_target_ly' => round($distanceLy, 2),
+                'risk_score' => $riskScore,
+                'hops' => (int) $meta['hops'],
+            ];
+        }
+
+        usort($scored, static fn ($a, $b) => $a['score'] <=> $b['score']);
+        return array_slice($scored, 0, max(5, $maxCandidates));
     }
 }

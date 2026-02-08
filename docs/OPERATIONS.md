@@ -10,7 +10,7 @@
 - `/api/v1/health` provides liveness.
 
 ## Updating Risk Data
-- Schedule `php bin/console import:risk` via cron.
+- Schedule `php bin/console import:risk` via cron for static or manual inputs.
 - Optional: schedule `php bin/console risk:fetch` for live zKillboard snapshots (rate limit responsibly).
 - For live killfeed aggregation, run `php bin/console risk:ingest` continuously with `RISK_PROVIDER=zkillredisq`.
 - Prune old kill events daily with `php bin/console risk:prune` (retention is `RISK_EVENT_RETENTION_HOURS`).
@@ -45,6 +45,12 @@ WantedBy=multi-user.target
 Example cron for pruning:
 ```cron
 0 * * * * /usr/bin/php /var/www/everoute/bin/console risk:prune
+```
+
+Example cron with `flock` (recommended):
+```cron
+* * * * * flock -n /var/lock/everoute-risk-ingest.lock /usr/bin/php /var/www/everoute/bin/console risk:ingest --seconds=55
+0 * * * * flock -n /var/lock/everoute-risk-prune.lock /usr/bin/php /var/www/everoute/bin/console risk:prune
 ```
 
 ## Updating SDE Data
@@ -95,6 +101,11 @@ php bin/console precompute:jump-neighbors --hours=1
 
 # explicit ranges
 php bin/console precompute:jump-neighbors --ranges=5,6,7,8,9,10 --hours=24 --resume
+```
+
+Suggested cron (off-peak, resumable):
+```cron
+15 4 * * 1 flock -n /var/lock/everoute-precompute-jump-neighbors.lock /usr/bin/php /var/www/everoute/bin/console precompute:jump-neighbors --hours=6 --resume
 ```
 
 ### Performance tuning knobs
