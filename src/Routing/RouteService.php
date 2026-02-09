@@ -148,7 +148,65 @@ final class RouteService
         ]);
 
         if (empty($pathResult['path'])) {
-            return ['error' => 'No route found'];
+            if (($options['mode'] ?? '') !== 'capital') {
+                return ['error' => 'No route found'];
+            }
+
+            $jumpPlan = $this->jumpPlanner->plan(
+                $startId,
+                $endId,
+                $this->systems,
+                $this->risk,
+                $options,
+                [],
+                []
+            );
+            if (empty($jumpPlan['feasible'])) {
+                return ['error' => 'No route found'];
+            }
+
+            $jumpPath = $this->pathFromJumpSegments($jumpPlan['segments'] ?? $jumpPlan['jump_segments'] ?? []);
+            if ($jumpPath === []) {
+                return ['error' => 'No route found'];
+            }
+
+            $summary = $this->summarizeRoute($jumpPath, $options);
+            $why = $this->explainRoute($jumpPath, $startId, $endId, $options);
+            $rules = [
+                'constraints' => $this->rules->rejectionReasons($options),
+                'jump' => [
+                    'cooldown_minutes_estimate' => $jumpPlan['jump_cooldown_total_minutes'] ?? null,
+                    'fatigue_minutes_estimate' => $jumpPlan['jump_fatigue_estimate_minutes'] ?? null,
+                    'fatigue_risk' => $jumpPlan['jump_fatigue_risk_label'] ?? null,
+                ],
+            ];
+
+            $plans = [
+                'gate' => [
+                    'feasible' => false,
+                    'estimated_time_s' => null,
+                    'total_time_s' => null,
+                    'risk_score' => null,
+                    'exposure_score' => null,
+                    'total_jumps' => null,
+                ],
+                'jump' => $jumpPlan,
+                'hybrid' => [
+                    'feasible' => false,
+                    'reason' => 'Gate routing limits prevented hybrid planning.',
+                    'gate_segment' => [],
+                    'jump_segment' => [],
+                ],
+            ];
+            $plans['recommended'] = $this->selectRecommendedPlan($plans);
+
+            return array_merge($summary, [
+                'partial' => false,
+                'why' => $why,
+                'midpoints' => $this->suggestMidpoints($jumpPath),
+                'rules' => $rules,
+                'plans' => $plans,
+            ]);
         }
 
         if ($pathResult['status'] === 'partial') {
@@ -173,6 +231,7 @@ final class RouteService
         $plans = [];
         if (($options['mode'] ?? '') === 'capital') {
             $plans['gate'] = [
+                'feasible' => true,
                 'estimated_time_s' => $summary['travel_time_proxy'],
                 'total_time_s' => $summary['travel_time_proxy'],
                 'risk_score' => $summary['risk_score'],
@@ -826,7 +885,7 @@ final class RouteService
                 continue;
             }
             $plan = $plans[$type];
-            if ($type !== 'gate' && empty($plan['feasible'])) {
+            if (isset($plan['feasible']) && !$plan['feasible']) {
                 continue;
             }
             $time = (float) ($plan['total_time_s'] ?? $plan['estimated_time_s'] ?? INF);
@@ -1029,6 +1088,27 @@ final class RouteService
             }
         }
         return $ids;
+    }
+
+    /**
+     * @param array<int, array{from_id:int,to_id:int}> $segments
+     * @return int[]
+     */
+    private function pathFromJumpSegments(array $segments): array
+    {
+        if ($segments === []) {
+            return [];
+        }
+
+        $path = [];
+        foreach ($segments as $index => $segment) {
+            if ($index === 0) {
+                $path[] = (int) $segment['from_id'];
+            }
+            $path[] = (int) $segment['to_id'];
+        }
+
+        return $path;
     }
 
     /**
