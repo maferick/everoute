@@ -95,6 +95,11 @@ final class ApiController
             'preference' => $preference,
             'avoid_lowsec' => $this->validator->bool($body['avoid_lowsec'] ?? null, false),
             'avoid_nullsec' => $this->validator->bool($body['avoid_nullsec'] ?? null, false),
+            'avoid_strictness' => $this->validator->enum(
+                strtolower((string) ($body['avoid_strictness'] ?? 'soft')),
+                ['soft', 'strict'],
+                'soft'
+            ),
             'avoid_systems' => isset($body['avoid_specific_systems']) ? $this->validator->list((string) $body['avoid_specific_systems']) : [],
             'prefer_npc' => $this->validator->bool($body['prefer_npc_stations'] ?? null, $mode === 'capital'),
             'ship_modifier' => $this->shipModifier($shipClass),

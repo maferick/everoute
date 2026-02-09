@@ -137,6 +137,18 @@ final class NavigationEngine
 
     private function computeGateRoute(int $startId, int $endId, string $shipType, array $options): array
     {
+        $route = $this->computeGateRouteAttempt($startId, $endId, $shipType, $options);
+        $fallbackUsed = false;
+        if ($this->shouldAttemptFallback($route, $options)) {
+            $relaxedOptions = $this->relaxAvoidOptions($options);
+            $route = $this->computeGateRouteAttempt($startId, $endId, $shipType, $relaxedOptions);
+            $fallbackUsed = true;
+        }
+        return $this->withRouteMeta($route, $fallbackUsed);
+    }
+
+    private function computeGateRouteAttempt(int $startId, int $endId, string $shipType, array $options): array
+    {
         $preference = $this->normalizeGatePreference($options);
         if ($startId === $endId) {
             return [
@@ -209,16 +221,16 @@ final class NavigationEngine
             $neighbors,
             $startId,
             $endId,
-            function (int $from, int $to) use ($useSubcapPolicy, $preference): float {
+            function (int $from, int $to) use ($useSubcapPolicy, $preference, $options): float {
                 $system = $this->systems[$to] ?? null;
                 if ($system === null) {
                     return INF;
                 }
                 if ($useSubcapPolicy) {
-                    return $this->gateStepCost($preference, $system);
+                    return $this->gateStepCost($preference, $system) + $this->avoidPenalty($system, $options);
                 }
                 $riskScore = $this->riskScore($to);
-                return 1.0 + ($riskScore * $this->riskWeightCache);
+                return 1.0 + ($riskScore * $this->riskWeightCache) + $this->avoidPenalty($system, $options);
             },
             null,
             $useSubcapPolicy ? $policy['allowed'] : null,
@@ -265,6 +277,24 @@ final class NavigationEngine
     private float $riskWeightCache = 0.0;
 
     private function computeJumpRoute(
+        int $startId,
+        int $endId,
+        string $shipType,
+        ?float $effectiveRange,
+        ?int $rangeBucket,
+        array $options
+    ): array {
+        $route = $this->computeJumpRouteAttempt($startId, $endId, $shipType, $effectiveRange, $rangeBucket, $options);
+        $fallbackUsed = false;
+        if ($this->shouldAttemptFallback($route, $options)) {
+            $relaxedOptions = $this->relaxAvoidOptions($options);
+            $route = $this->computeJumpRouteAttempt($startId, $endId, $shipType, $effectiveRange, $rangeBucket, $relaxedOptions);
+            $fallbackUsed = true;
+        }
+        return $this->withRouteMeta($route, $fallbackUsed);
+    }
+
+    private function computeJumpRouteAttempt(
         int $startId,
         int $endId,
         string $shipType,
@@ -345,12 +375,20 @@ final class NavigationEngine
             $graph['neighbors'],
             $startId,
             $endId,
-            function (int $from, int $to, mixed $edgeData): float {
+            function (int $from, int $to, mixed $edgeData) use ($options): float {
+                $system = $this->systems[$to] ?? null;
+                if ($system === null) {
+                    return INF;
+                }
                 $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
                 $fatigue = 5.0 + ($distance * 6.0);
                 $cooldown = max(1.0, $distance * 1.0);
                 $riskScore = $this->riskScore($to);
-                return $distance + $fatigue + $cooldown + ($riskScore * $this->riskWeightCache);
+                return $distance
+                    + $fatigue
+                    + $cooldown
+                    + ($riskScore * $this->riskWeightCache)
+                    + $this->avoidPenalty($system, $options);
             },
             null,
             null,
@@ -393,6 +431,24 @@ final class NavigationEngine
     }
 
     private function computeHybridRoute(
+        int $startId,
+        int $endId,
+        string $shipType,
+        ?float $effectiveRange,
+        ?int $rangeBucket,
+        array $options
+    ): array {
+        $route = $this->computeHybridRouteAttempt($startId, $endId, $shipType, $effectiveRange, $rangeBucket, $options);
+        $fallbackUsed = false;
+        if ($this->shouldAttemptFallback($route, $options)) {
+            $relaxedOptions = $this->relaxAvoidOptions($options);
+            $route = $this->computeHybridRouteAttempt($startId, $endId, $shipType, $effectiveRange, $rangeBucket, $relaxedOptions);
+            $fallbackUsed = true;
+        }
+        return $this->withRouteMeta($route, $fallbackUsed);
+    }
+
+    private function computeHybridRouteAttempt(
         int $startId,
         int $endId,
         string $shipType,
@@ -459,18 +515,26 @@ final class NavigationEngine
             $graph,
             $startId,
             $endId,
-            function (int $from, int $to, mixed $edgeData): float {
+            function (int $from, int $to, mixed $edgeData) use ($options): float {
+                $system = $this->systems[$to] ?? null;
+                if ($system === null) {
+                    return INF;
+                }
                 $edgeType = $edgeData['type'] ?? 'gate';
                 if ($edgeType === 'jump') {
                     $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
                     $fatigue = 5.0 + ($distance * 6.0);
                     $cooldown = max(1.0, $distance * 1.0);
                     $riskScore = $this->riskScore($to);
-                    return $distance + $fatigue + $cooldown + ($riskScore * $this->riskWeightCache);
+                    return $distance
+                        + $fatigue
+                        + $cooldown
+                        + ($riskScore * $this->riskWeightCache)
+                        + $this->avoidPenalty($system, $options);
                 }
 
                 $riskScore = $this->riskScore($to);
-                return 1.0 + ($riskScore * $this->riskWeightCache);
+                return 1.0 + ($riskScore * $this->riskWeightCache) + $this->avoidPenalty($system, $options);
             },
             null,
             null,
@@ -626,11 +690,13 @@ final class NavigationEngine
         }
         $security = (float) ($system['security'] ?? 0.0);
         if ($isMidpoint) {
-            if (!empty($options['avoid_nullsec']) && $security < 0.1) {
-                return false;
-            }
-            if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
-                return false;
+            if ($this->shouldFilterAvoidedSpace($options)) {
+                if (!empty($options['avoid_nullsec']) && $security < 0.1) {
+                    return false;
+                }
+                if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
+                    return false;
+                }
             }
             if (!empty($options['avoid_systems']) && in_array($system['name'], (array) $options['avoid_systems'], true)) {
                 return false;
@@ -702,6 +768,86 @@ final class NavigationEngine
         ];
     }
 
+    private function shouldFilterAvoidedSpace(array $options): bool
+    {
+        $strictness = strtolower((string) ($options['avoid_strictness'] ?? 'soft'));
+        return $strictness === 'strict';
+    }
+
+    private function relaxAvoidOptions(array $options): array
+    {
+        $options['avoid_strictness'] = 'soft';
+        return $options;
+    }
+
+    private function shouldAttemptFallback(array $route, array $options): bool
+    {
+        if (!empty($route['feasible'])) {
+            return false;
+        }
+        if (!$this->shouldFilterAvoidedSpace($options)) {
+            return false;
+        }
+        if (empty($options['avoid_lowsec']) && empty($options['avoid_nullsec'])) {
+            return false;
+        }
+        $reason = (string) ($route['reason'] ?? '');
+        if (in_array($reason, [
+            'Jump route unavailable for subcapital ships.',
+            'Hybrid route unavailable for subcapital ships.',
+            'Jump range unavailable for ship.',
+            'Missing precomputed jump neighbors.',
+        ], true)) {
+            return false;
+        }
+        return true;
+    }
+
+    private function withRouteMeta(array $route, bool $fallbackUsed): array
+    {
+        $route['fallback_used'] = $fallbackUsed;
+        $systems = is_array($route['systems'] ?? null) ? $route['systems'] : [];
+        $route['space_types'] = $this->spaceTypesUsed($systems);
+        return $route;
+    }
+
+    /** @param array<int, array{security: float}> $systems */
+    private function spaceTypesUsed(array $systems): array
+    {
+        $types = [];
+        foreach ($systems as $system) {
+            $security = (float) ($system['security'] ?? 0.0);
+            if ($security >= 0.5) {
+                $types['highsec'] = true;
+            } elseif ($security >= 0.1) {
+                $types['lowsec'] = true;
+            } else {
+                $types['nullsec'] = true;
+            }
+        }
+        $ordered = ['highsec', 'lowsec', 'nullsec'];
+        $result = [];
+        foreach ($ordered as $type) {
+            if (isset($types[$type])) {
+                $result[] = $type;
+            }
+        }
+        return $result;
+    }
+
+    private function avoidPenalty(array $system, array $options): float
+    {
+        $security = (float) ($system['security'] ?? 0.0);
+        $penalty = 0.0;
+        if (!empty($options['avoid_nullsec']) && $security < 0.1) {
+            $penalty += 2.5;
+        }
+        if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
+            $penalty += 1.5;
+        }
+        return $penalty;
+    }
+
     private function resolveRangeBucket(?float $effectiveRange): ?int
     {
         if ($effectiveRange === null) {
@@ -749,12 +895,20 @@ final class NavigationEngine
                 $graph['neighbors'],
                 $startId,
                 $endId,
-                function (int $from, int $to, mixed $edgeData): float {
+                function (int $from, int $to, mixed $edgeData) use ($options): float {
+                    $system = $this->systems[$to] ?? null;
+                    if ($system === null) {
+                        return INF;
+                    }
                     $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
                     $fatigue = 5.0 + ($distance * 6.0);
                     $cooldown = max(1.0, $distance * 1.0);
                     $riskScore = $this->riskScore($to);
-                    return $distance + $fatigue + $cooldown + ($riskScore * $this->riskWeightCache);
+                    return $distance
+                        + $fatigue
+                        + $cooldown
+                        + ($riskScore * $this->riskWeightCache)
+                        + $this->avoidPenalty($system, $options);
                 },
                 null,
                 null,
@@ -973,11 +1127,13 @@ final class NavigationEngine
 
         $security = (float) ($system['security'] ?? 0.0);
         if ($isMidpoint) {
-            if (!empty($options['avoid_nullsec']) && $security < 0.1) {
-                return 'avoid_nullsec';
-            }
-            if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
-                return 'avoid_lowsec';
+            if ($this->shouldFilterAvoidedSpace($options)) {
+                if (!empty($options['avoid_nullsec']) && $security < 0.1) {
+                    return 'avoid_nullsec';
+                }
+                if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
+                    return 'avoid_lowsec';
+                }
             }
             if (!empty($options['avoid_systems'])
                 && in_array($system['name'], (array) $options['avoid_systems'], true)
@@ -993,6 +1149,7 @@ final class NavigationEngine
     private function buildSubcapGatePolicy(int $startId, int $endId, array $options): array
     {
         $avoidFlags = $this->buildAvoidFlags($options);
+        $applyAvoidFilters = $this->shouldFilterAvoidedSpace($options);
         $avoidNames = array_fill_keys((array) ($options['avoid_systems'] ?? []), true);
         $blocked = [];
         $allowedCore = [];
@@ -1004,7 +1161,9 @@ final class NavigationEngine
                 continue;
             }
             $security = (float) ($system['security'] ?? 0.0);
-            if ($this->isInAllowedCore($security, $avoidFlags['avoid_lowsec'], $avoidFlags['avoid_nullsec'])) {
+            $avoidLowsec = $applyAvoidFilters ? $avoidFlags['avoid_lowsec'] : false;
+            $avoidNullsec = $applyAvoidFilters ? $avoidFlags['avoid_nullsec'] : false;
+            if ($this->isInAllowedCore($security, $avoidLowsec, $avoidNullsec)) {
                 $allowedCore[$id] = true;
             }
         }
