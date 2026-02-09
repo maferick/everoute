@@ -194,6 +194,14 @@ final class NavigationEngine
                 'illegal_systems_filtered' => 0,
             ];
         }
+        if (!$this->shipRules->isJumpCapable($options)) {
+            return [
+                'feasible' => false,
+                'reason' => 'Jump route unavailable for subcapital ships.',
+                'nodes_explored' => 0,
+                'illegal_systems_filtered' => 0,
+            ];
+        }
         if ($effectiveRange === null || $rangeBucket === null || $rangeBucket < 1 || $rangeBucket > 10) {
             return [
                 'feasible' => false,
@@ -287,6 +295,14 @@ final class NavigationEngine
                     'name' => $this->systems[$startId]['name'] ?? (string) $startId,
                     'security' => (float) ($this->systems[$startId]['security'] ?? 0.0),
                 ]],
+                'nodes_explored' => 0,
+                'illegal_systems_filtered' => 0,
+            ];
+        }
+        if (!$this->shipRules->isJumpCapable($options)) {
+            return [
+                'feasible' => false,
+                'reason' => 'Hybrid route unavailable for subcapital ships.',
                 'nodes_explored' => 0,
                 'illegal_systems_filtered' => 0,
             ];

@@ -76,4 +76,22 @@ final class ShipRules
 
         return true;
     }
+
+    public function isJumpCapable(array $options): bool
+    {
+        $mode = (string) ($options['mode'] ?? '');
+        $shipClass = JumpShipType::normalizeJumpShipType((string) ($options['ship_class'] ?? ''));
+        $jumpShipType = JumpShipType::normalizeJumpShipType((string) ($options['jump_ship_type'] ?? ''));
+
+        if (in_array($shipClass, JumpShipType::CAPITALS, true) || $shipClass === JumpShipType::JUMP_FREIGHTER) {
+            return true;
+        }
+
+        if ($mode !== 'capital') {
+            return false;
+        }
+
+        return in_array($jumpShipType, JumpShipType::CAPITALS, true)
+            || $jumpShipType === JumpShipType::JUMP_FREIGHTER;
+    }
 }
