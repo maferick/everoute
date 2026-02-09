@@ -37,6 +37,11 @@ if (file_exists($autoload)) {
     require_once __DIR__ . '/../src/Universe/SystemRepository.php';
 }
 
+if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+    echo "SQLite driver not available, skipping hybrid planner integration test.\n";
+    exit(0);
+}
+
 $connection = new Connection('sqlite::memory:', '', '');
 $pdo = $connection->pdo();
 $pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, region_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
