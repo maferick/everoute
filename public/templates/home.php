@@ -228,21 +228,18 @@ $tabs = [
                                         <?php endif; ?>
                                     <?php endif; ?>
                                 <?php endif; ?>
-                                <h3>Route</h3>
-                                <ol>
-                                    <?php foreach ($route['systems'] as $system): ?>
-                                        <li>
-                                            <?= htmlspecialchars($system['name'], ENT_QUOTES) ?>
-                                            <?php $securityRaw = $system['security_raw'] ?? null; ?>
-                                            <span class="badge"<?= $securityRaw !== null ? ' title="Raw sec: ' . htmlspecialchars((string) $securityRaw, ENT_QUOTES) . '"' : '' ?>>
-                                                Sec <?= htmlspecialchars((string) $system['security'], ENT_QUOTES) ?>
-                                            </span>
-                                            <?php if ($system['chokepoint']): ?><span class="badge danger">Chokepoint</span><?php endif; ?>
-                                            <?php if ($system['npc_station']): ?><span class="badge">NPC station</span><?php endif; ?>
-                                            <span class="badge">Risk <?= round($system['risk'], 1) ?></span>
-                                        </li>
-                                    <?php endforeach; ?>
-                                </ol>
+                                <h3>Route details</h3>
+                                <?php
+                                    $routeLines = array_map(
+                                        static fn ($system) => sprintf(
+                                            '%s Sec %s',
+                                            $system['name'],
+                                            $system['security']
+                                        ),
+                                        $route['systems']
+                                    );
+                                ?>
+                                <pre class="route-lines"><?= htmlspecialchars(implode("\n", $routeLines), ENT_QUOTES) ?></pre>
                                 <?php if (!empty($route['midpoints'])): ?>
                                     <h3>Midpoint Suggestions</h3>
                                     <ul>
@@ -279,7 +276,7 @@ $tabs = [
                             <p>Jump fatigue estimate: <?= htmlspecialchars((string) ($route['fatigue']['fatigue_minutes_estimate'] ?? 'n/a'), ENT_QUOTES) ?> min (<?= htmlspecialchars((string) ($route['fatigue']['fatigue_risk'] ?? 'n/a'), ENT_QUOTES) ?>)</p>
                         <?php endif; ?>
                         <?php if (!empty($route['segments'])): ?>
-                            <p>
+                            <p class="route-path">
                                 <?= htmlspecialchars(implode(' → ', array_map(
                                     static fn ($seg) => $seg['from'] ?? '',
                                     $route['segments']
@@ -288,19 +285,18 @@ $tabs = [
                             </p>
                         <?php endif; ?>
                         <?php if (!empty($route['systems'])): ?>
-                            <ol>
-                                <?php foreach ($route['systems'] as $system): ?>
-                                    <li>
-                                        <?= htmlspecialchars($system['name'] ?? 'Unknown', ENT_QUOTES) ?>
-                                        <?php if (isset($system['security'])): ?>
-                                            <?php $securityRaw = $system['security_raw'] ?? null; ?>
-                                            <span class="badge"<?= $securityRaw !== null ? ' title="Raw sec: ' . htmlspecialchars((string) $securityRaw, ENT_QUOTES) . '"' : '' ?>>
-                                                Sec <?= htmlspecialchars((string) $system['security'], ENT_QUOTES) ?>
-                                            </span>
-                                        <?php endif; ?>
-                                    </li>
-                                <?php endforeach; ?>
-                            </ol>
+                            <?php
+                                $routeLines = array_map(
+                                    static fn ($system) => sprintf(
+                                        '%s Sec %s',
+                                        $system['name'] ?? 'Unknown',
+                                        $system['security'] ?? 'n/a'
+                                    ),
+                                    $route['systems']
+                                );
+                            ?>
+                            <h5 class="route-subtitle">Systems in route</h5>
+                            <pre class="route-lines"><?= htmlspecialchars(implode("\n", $routeLines), ENT_QUOTES) ?></pre>
                         <?php endif; ?>
                     <?php else: ?>
                         <p class="error">Not feasible: <?= htmlspecialchars((string) ($route['reason'] ?? 'Unknown reason'), ENT_QUOTES) ?></p>
