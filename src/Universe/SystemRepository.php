@@ -50,11 +50,11 @@ final class SystemRepository
         $stmt = $pdo->prepare(
             "SELECT {$selectFields}
              FROM systems
-             WHERE name LIKE :prefix OR name LIKE :contains
+             WHERE name LIKE :prefix_match OR name LIKE :contains
              ORDER BY
                 CASE
                     WHEN name = :exact THEN 0
-                    WHEN name LIKE :prefix THEN 1
+                    WHEN name LIKE :prefix_rank THEN 1
                     ELSE 2
                 END,
                 LENGTH(name) ASC,
@@ -63,7 +63,8 @@ final class SystemRepository
         );
         $stmt->execute([
             'exact' => $query,
-            'prefix' => $query . '%',
+            'prefix_match' => $query . '%',
+            'prefix_rank' => $query . '%',
             'contains' => '%' . $query . '%',
         ]);
 
