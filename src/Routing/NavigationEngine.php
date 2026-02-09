@@ -297,6 +297,7 @@ final class NavigationEngine
                 'effective_range_ly' => $effectiveRange,
                 'bucket' => $rangeBucket,
             ]);
+            $this->logJumpOriginNeighborDiagnostics($startId, $endId, $shipType, $options, $rangeBucket);
         }
 
         $neighbors = $this->jumpNeighborRepo->loadRangeBucket($rangeBucket, count($this->systems));
@@ -756,6 +757,175 @@ final class NavigationEngine
                 'filtered' => $graph['filtered'],
             ]);
         }
+    }
+
+    private function logJumpOriginNeighborDiagnostics(
+        int $startId,
+        int $endId,
+        string $shipType,
+        array $options,
+        int $rangeBucket
+    ): void {
+        $origin = $this->systems[$startId] ?? null;
+        if ($origin === null) {
+            $this->logger->debug('Jump origin missing system data', ['origin_id' => $startId]);
+            return;
+        }
+
+        $this->logger->debug('Jump origin resolved', [
+            'origin_name' => $origin['name'] ?? (string) $startId,
+            'origin_id' => $startId,
+            'origin_security' => (float) ($origin['security'] ?? 0.0),
+        ]);
+        $originReason = $this->jumpFilterReason($shipType, $origin, false, $options);
+        if ($originReason !== null) {
+            $this->logger->warning('Jump origin disallowed by routing rules', [
+                'origin_id' => $startId,
+                'bucket' => $rangeBucket,
+                'reason' => $originReason,
+            ]);
+        }
+
+        $originNeighbors = $this->jumpNeighborRepo->loadSystemNeighbors($startId, $rangeBucket);
+        if ($originNeighbors === null) {
+            $this->logger->debug('Jump neighbors missing at origin', [
+                'origin_id' => $startId,
+                'bucket' => $rangeBucket,
+            ]);
+            return;
+        }
+
+        $decodedNeighbors = $originNeighbors['neighbor_ids'];
+        $decodedCount = count($decodedNeighbors);
+        $fetchedCount = $originNeighbors['neighbor_count'];
+        $this->logger->debug('Jump origin neighbor payload', [
+            'origin_id' => $startId,
+            'bucket' => $rangeBucket,
+            'fetched_neighbor_count' => $fetchedCount,
+            'decoded_neighbor_count' => $decodedCount,
+        ]);
+
+        if ($decodedCount === 0 && $fetchedCount > 0) {
+            $this->logger->warning('Jump neighbors empty at origin. Likely decode/DB mismatch.', [
+                'origin_id' => $startId,
+                'bucket' => $rangeBucket,
+                'fetched_neighbor_count' => $fetchedCount,
+            ]);
+        }
+
+        $beforeList = $this->formatNeighborSamples($decodedNeighbors, 10);
+        $filteredCounts = [
+            'filtered_highsec' => 0,
+            'filtered_avoided' => 0,
+            'filtered_other' => 0,
+        ];
+        $filteredOtherReasons = [];
+        $afterNeighbors = [];
+        foreach ($decodedNeighbors as $neighborId) {
+            $system = $this->systems[$neighborId] ?? null;
+            if ($system === null) {
+                $filteredCounts['filtered_other']++;
+                $filteredOtherReasons['missing_system'] = true;
+                continue;
+            }
+            $toIsMidpoint = $neighborId !== $startId && $neighborId !== $endId;
+            $reason = $this->jumpFilterReason($shipType, $system, $toIsMidpoint, $options);
+            if ($reason === null) {
+                $afterNeighbors[] = $neighborId;
+                continue;
+            }
+            if ($reason === 'highsec') {
+                $filteredCounts['filtered_highsec']++;
+            } elseif (str_starts_with($reason, 'avoid_')) {
+                $filteredCounts['filtered_avoided']++;
+            } else {
+                $filteredCounts['filtered_other']++;
+                $filteredOtherReasons[$reason] = true;
+            }
+        }
+
+        $afterList = $this->formatNeighborSamples($afterNeighbors, 10);
+        $this->logger->debug('Jump origin neighbor filtering', array_merge([
+            'origin_id' => $startId,
+            'bucket' => $rangeBucket,
+            'before_filter' => $beforeList,
+            'after_filter' => $afterList,
+        ], $filteredCounts));
+
+        if ($filteredCounts['filtered_other'] > 0) {
+            $this->logger->warning('Jump origin neighbor filter predicate flagged', [
+                'origin_id' => $startId,
+                'bucket' => $rangeBucket,
+                'filtered_other_reasons' => array_keys($filteredOtherReasons),
+            ]);
+        }
+
+        if ($decodedCount === 0 && $fetchedCount === 0) {
+            $this->logger->warning('Jump origin has zero neighbors in DB.', [
+                'origin_id' => $startId,
+                'bucket' => $rangeBucket,
+            ]);
+            return;
+        }
+
+        if ($beforeList === [] && $decodedCount > 0) {
+            $this->logger->warning('Jump neighbors decoded but missing system entries at origin.', [
+                'origin_id' => $startId,
+                'bucket' => $rangeBucket,
+            ]);
+        }
+
+        if ($beforeList !== [] && $afterList === []) {
+            $this->logger->warning('All jump neighbors filtered at origin.', [
+                'origin_id' => $startId,
+                'bucket' => $rangeBucket,
+            ]);
+        }
+    }
+
+    /** @return array<int, array{name:string, security:float}> */
+    private function formatNeighborSamples(array $neighborIds, int $limit): array
+    {
+        $samples = [];
+        foreach ($neighborIds as $neighborId) {
+            if (count($samples) >= $limit) {
+                break;
+            }
+            $system = $this->systems[$neighborId] ?? null;
+            $samples[] = [
+                'name' => $system['name'] ?? (string) $neighborId,
+                'security' => (float) ($system['security'] ?? 0.0),
+            ];
+        }
+        return $samples;
+    }
+
+    private function jumpFilterReason(string $shipType, array $system, bool $isMidpoint, array $options): ?string
+    {
+        if (!$this->shipRules->isSystemAllowed($shipType, $system, $isMidpoint)) {
+            $security = (float) ($system['security'] ?? 0.0);
+            if ($security >= 0.5) {
+                return 'highsec';
+            }
+            return 'ship_rules';
+        }
+
+        $security = (float) ($system['security'] ?? 0.0);
+        if ($isMidpoint) {
+            if (!empty($options['avoid_nullsec']) && $security < 0.1) {
+                return 'avoid_nullsec';
+            }
+            if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
+                return 'avoid_lowsec';
+            }
+            if (!empty($options['avoid_systems'])
+                && in_array($system['name'], (array) $options['avoid_systems'], true)
+            ) {
+                return 'avoid_systems';
+            }
+        }
+
+        return null;
     }
 
     /** @return array{allowed: ?array<int, bool>, filtered: int, exception: array<string, array<string, int|bool>>, reason: ?string} */
