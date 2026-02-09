@@ -73,7 +73,7 @@ $tabs = [
                     Jump Range Skill Level
                     <select name="jump_skill_level">
                         <?php
-                        $selectedLevel = $_POST['jump_skill_level'] ?? '4';
+                        $selectedLevel = $_POST['jump_skill_level'] ?? '5';
                         for ($level = 0; $level <= 5; $level++) {
                             $selected = ((string) $level === (string) $selectedLevel) ? 'selected' : '';
                             echo "<option value=\"{$level}\" {$selected}>{$level}</option>";

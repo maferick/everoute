@@ -72,13 +72,15 @@ final class ApiController
             'titan',
         ], 'subcap');
 
-        $safety = $this->validator->int($body['safety_vs_speed'] ?? null, 0, 100, $mode === 'capital' ? 70 : 50);
-
         $jumpShipType = $this->validator->string($body['jump_ship_type'] ?? null);
         if ($jumpShipType === null || $jumpShipType === '') {
             $jumpShipType = $shipClass === 'jump_freighter' ? JumpShipType::JUMP_FREIGHTER : JumpShipType::CARRIER;
         }
-        $jumpSkillLevel = $this->validator->int($body['jump_skill_level'] ?? null, 0, 5, 4);
+        if (in_array($shipClass, ['capital', 'jump_freighter', 'super', 'titan'], true)) {
+            $mode = 'capital';
+        }
+        $safety = $this->validator->int($body['safety_vs_speed'] ?? null, 0, 100, $mode === 'capital' ? 70 : 50);
+        $jumpSkillLevel = $this->validator->int($body['jump_skill_level'] ?? null, 0, 5, 5);
 
         $options = [
             'from' => $from,
