@@ -7,14 +7,11 @@ namespace Everoute\Routing;
 final class JumpFatigueModel
 {
     private const MAX_FATIGUE_MIN = 300.0;
-    private const COOLDOWN_BASE_PER_LY_MIN = 1.0;
-    private const COOLDOWN_FATIGUE_SCALE = 60.0;
-    private const FATIGUE_BASE_PER_JUMP_MIN = 5.0;
-    private const FATIGUE_PER_LY_MIN = 6.0;
     private const MAX_COOLDOWN_MIN = 30.0;
 
     /**
-     * @param array<int, array{distance_ly: float|int}> $segments
+     * @param array<int, array{distance_ly: float|int, bridge_chain_type?: string}> $segments
+     * @param array{ship_class?: string, jump_ship_type?: string, bridge_chain_type?: string} $options
      * @return array{
      *   cooldowns_minutes: array<int, float>,
      *   cooldown_total_minutes: float,
@@ -23,22 +20,30 @@ final class JumpFatigueModel
      *   caps: array{max_fatigue_minutes: float, max_cooldown_minutes: float}
      * }
      */
-    public function evaluate(array $segments): array
+    public function evaluate(array $segments, array $options = []): array
     {
         $fatigue = 0.0;
         $cooldowns = [];
         $cooldownTotal = 0.0;
+        $shipClass = (string) ($options['ship_class'] ?? '');
+        $jumpShipType = (string) ($options['jump_ship_type'] ?? '');
+        $defaultBridgeChain = (string) ($options['bridge_chain_type'] ?? '');
 
         foreach ($segments as $segment) {
             $distanceLy = max(0.0, (float) ($segment['distance_ly'] ?? 0.0));
-            $cooldownBase = max(1.0, $distanceLy * self::COOLDOWN_BASE_PER_LY_MIN);
-            $cooldown = min(self::MAX_COOLDOWN_MIN, $cooldownBase * (1 + ($fatigue / self::COOLDOWN_FATIGUE_SCALE)));
+            $bridgeChain = (string) ($segment['bridge_chain_type'] ?? $defaultBridgeChain);
+            $effectiveLy = $distanceLy * JumpShipType::fatigueDistanceMultiplier($shipClass, $jumpShipType, $bridgeChain);
+            $priorFatigue = $fatigue;
+            $cooldown = min(self::MAX_COOLDOWN_MIN, max(1.0 + $effectiveLy, $priorFatigue / 10.0));
 
-            $fatigueIncrease = self::FATIGUE_BASE_PER_JUMP_MIN + ($distanceLy * self::FATIGUE_PER_LY_MIN);
-            $fatigue = min(self::MAX_FATIGUE_MIN, $fatigue + $fatigueIncrease);
+            $fatigue = min(
+                self::MAX_FATIGUE_MIN,
+                max(10.0 * (1.0 + $effectiveLy), $priorFatigue * (1.0 + $effectiveLy))
+            );
 
             $cooldowns[] = round($cooldown, 2);
             $cooldownTotal += $cooldown;
+            $fatigue = max(0.0, $fatigue - $cooldown);
         }
 
         $risk = 'low';

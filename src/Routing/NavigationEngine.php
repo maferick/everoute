@@ -434,7 +434,7 @@ final class NavigationEngine
         $summary = $this->summarizeRoute($segments, $result['distance']);
         $summary['nodes_explored'] = $result['nodes_explored'];
         $summary['illegal_systems_filtered'] = $graph['filtered'];
-        $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($segments));
+        $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($segments), $options);
         $summary['debug'] = $originDiagnostics;
         return $summary;
     }
@@ -624,7 +624,7 @@ final class NavigationEngine
                 $summary = $this->summarizeRoute($segments, $totalCost);
                 $summary['nodes_explored'] = $nodesExplored;
                 $summary['illegal_systems_filtered'] = 0;
-                $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($jumpSegments));
+                $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($jumpSegments), $options);
                 $summary['launch_system'] = $this->systemSummary($launchId);
                 $summary['landing_system'] = $this->systemSummary($landingId);
                 $summary['launch_gate_hops'] = $launch['gate_hops'];

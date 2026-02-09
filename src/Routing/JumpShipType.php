@@ -12,6 +12,22 @@ final class JumpShipType
     public const SUPER = 'super';
     public const TITAN = 'titan';
     public const JUMP_FREIGHTER = 'jump_freighter';
+    public const BRIDGE_CHAIN_BLACK_OPS = 'black_ops';
+    public const BRIDGE_CHAIN_COVOPS = 'covops';
+
+    private const FATIGUE_BRIDGE_CHAIN_REDUCTION = 0.75;
+    private const FATIGUE_INDUSTRIAL_REDUCTION = 0.90;
+
+    private const INDUSTRIAL_HAULER_CLASSES = [
+        'industrial',
+        'hauler',
+        'dst',
+        'freighter',
+        'jump_freighter',
+        'capsule',
+        'pod',
+        'shuttle',
+    ];
 
     public const ALL = [
         self::CARRIER,
@@ -53,9 +69,43 @@ final class JumpShipType
             'jumpfreighters' => self::JUMP_FREIGHTER,
             'jump_freighter' => self::JUMP_FREIGHTER,
             'jump_freighters' => self::JUMP_FREIGHTER,
+            'blackops' => self::BRIDGE_CHAIN_BLACK_OPS,
+            'black_ops' => self::BRIDGE_CHAIN_BLACK_OPS,
+            'black_ops_chain' => self::BRIDGE_CHAIN_BLACK_OPS,
+            'covert_ops' => self::BRIDGE_CHAIN_COVOPS,
+            'covertops' => self::BRIDGE_CHAIN_COVOPS,
+            'covops' => self::BRIDGE_CHAIN_COVOPS,
+            'cov_ops' => self::BRIDGE_CHAIN_COVOPS,
+            'cov_ops_chain' => self::BRIDGE_CHAIN_COVOPS,
         ];
 
         return $aliases[$normalized] ?? $normalized;
+    }
+
+    public static function fatigueDistanceMultiplier(
+        string $shipClass,
+        string $jumpShipType,
+        ?string $bridgeChainType = null
+    ): float {
+        $shipClass = self::normalizeJumpShipType($shipClass);
+        $jumpShipType = self::normalizeJumpShipType($jumpShipType);
+        $bridgeChain = $bridgeChainType === null ? '' : self::normalizeJumpShipType($bridgeChainType);
+
+        $multiplier = 1.0;
+        if (in_array($bridgeChain, [self::BRIDGE_CHAIN_BLACK_OPS, self::BRIDGE_CHAIN_COVOPS], true)) {
+            $multiplier = min($multiplier, 1.0 - self::FATIGUE_BRIDGE_CHAIN_REDUCTION);
+        }
+
+        if (self::isIndustrialHaulerClass($shipClass) || self::isIndustrialHaulerClass($jumpShipType)) {
+            $multiplier = min($multiplier, 1.0 - self::FATIGUE_INDUSTRIAL_REDUCTION);
+        }
+
+        return $multiplier;
+    }
+
+    private static function isIndustrialHaulerClass(string $shipClass): bool
+    {
+        return in_array($shipClass, self::INDUSTRIAL_HAULER_CLASSES, true);
     }
 
     public static function isAllowed(string $shipType): bool
