@@ -23,6 +23,7 @@ final class InstallCommand extends Command
             ->setName('install')
             ->setDescription('Install Everoute database and user')
             ->addOption('schema-only', null, InputOption::VALUE_NONE, 'Apply schema and seed only')
+            ->addOption('reset', null, InputOption::VALUE_NONE, 'Drop and recreate the database before applying schema')
             ->addOption('admin-user', null, InputOption::VALUE_REQUIRED, 'Admin DB user')
             ->addOption('admin-pass', null, InputOption::VALUE_REQUIRED, 'Admin DB password')
             ->addOption('db-host', null, InputOption::VALUE_REQUIRED, 'DB host', Env::get('DB_HOST', '127.0.0.1'))
@@ -37,6 +38,7 @@ final class InstallCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $schemaOnly = (bool) $input->getOption('schema-only');
+        $reset = (bool) $input->getOption('reset');
         $dbHost = (string) $input->getOption('db-host');
         $dbPort = (int) $input->getOption('db-port');
         $dbName = (string) $input->getOption('db-name');
@@ -59,11 +61,11 @@ final class InstallCommand extends Command
             $appPass = bin2hex(random_bytes(8));
         }
 
-        if (!$schemaOnly) {
+        if (!$schemaOnly || $reset) {
             $adminUser = (string) $input->getOption('admin-user');
             $adminPass = (string) $input->getOption('admin-pass');
             if ($adminUser === '' || $adminPass === '') {
-                $output->writeln('<error>Admin credentials are required for full install.</error>');
+                $output->writeln('<error>Admin credentials are required for full install or reset.</error>');
                 return Command::FAILURE;
             }
 
@@ -75,6 +77,10 @@ final class InstallCommand extends Command
             $dbNameSafe = str_replace('`', '``', $dbName);
             $appUserSafe = str_replace('`', '``', $appUser);
             $appPassSafe = $adminPdo->quote($appPass);
+            if ($reset) {
+                $adminPdo->exec("DROP DATABASE IF EXISTS `{$dbNameSafe}`");
+                $output->writeln('<info>Dropped existing database.</info>');
+            }
             $adminPdo->exec("CREATE DATABASE IF NOT EXISTS `{$dbNameSafe}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
             $adminPdo->exec("CREATE USER IF NOT EXISTS `{$appUserSafe}`@'%' IDENTIFIED BY {$appPassSafe}");
 
