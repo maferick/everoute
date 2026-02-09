@@ -59,7 +59,7 @@ $jumpNeighbors = new JumpNeighborRepository($connection);
 
 $weightCalculator = new WeightCalculator();
 $movementRules = new MovementRules();
-$jumpRanges = new JumpRangeCalculator(__DIR__ . '/../config/jump_ranges.php');
+$jumpRanges = new JumpRangeCalculator(__DIR__ . '/../config/ships.php', __DIR__ . '/../config/jump_ranges.php');
 $jumpPlanner = new JumpPlanner($jumpRanges, $weightCalculator, $movementRules, new JumpFatigueModel(), $logger, $jumpNeighbors);
 
 $routeService = new RouteService(
