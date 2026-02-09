@@ -8,6 +8,11 @@ final class JumpFatigueModel
 {
     private const MAX_FATIGUE_MIN = 300.0;
     private const MAX_COOLDOWN_MIN = 30.0;
+    private const LOOKUP_MIN_LY = 0.1;
+    private const LOOKUP_MAX_LY = 10.0;
+    private const LOOKUP_STEP_LY = 0.1;
+    /** @var array<string, array<string, array{jump_activation_minutes: float, jump_fatigue_minutes: float, effective_ly: float}>>|null */
+    private static ?array $lookupTable = null;
 
     /**
      * @param array<int, array{distance_ly: float|int, bridge_chain_type?: string}> $segments
@@ -63,13 +68,16 @@ final class JumpFatigueModel
         foreach ($segments as $index => $segment) {
             $distanceLy = max(0.0, (float) ($segment['distance_ly'] ?? 0.0));
             $bridgeChain = (string) ($segment['bridge_chain_type'] ?? $defaultBridgeChain);
-            $effectiveLy = $distanceLy * JumpShipType::fatigueDistanceMultiplier($shipClass, $jumpShipType, $bridgeChain);
+            $metrics = $this->lookupHopMetrics($shipClass, $jumpShipType, $bridgeChain, $distanceLy);
+            $effectiveLy = $metrics['effective_ly'];
+            $baseActivation = $metrics['jump_activation_minutes'];
+            $baseFatigue = $metrics['jump_fatigue_minutes'];
             $priorFatigue = $fatigue;
-            $cooldown = min(self::MAX_COOLDOWN_MIN, max(1.0 + $effectiveLy, $priorFatigue / 10.0));
+            $cooldown = min(self::MAX_COOLDOWN_MIN, max($baseActivation, $priorFatigue / 10.0));
 
             $fatigue = min(
                 self::MAX_FATIGUE_MIN,
-                max(10.0 * (1.0 + $effectiveLy), $priorFatigue * (1.0 + $effectiveLy))
+                max($baseFatigue, $priorFatigue * (1.0 + $effectiveLy))
             );
 
             $cooldowns[] = round($cooldown, 2);
@@ -101,6 +109,93 @@ final class JumpFatigueModel
             'fatigue_after_hop_minutes' => $fatigueAfter,
             'waits_minutes' => $waits,
             'total_wait_minutes' => round($totalWait, 2),
+        ];
+    }
+
+    /**
+     * @return array{jump_activation_minutes: float, jump_fatigue_minutes: float, effective_ly: float}
+     */
+    public function lookupHopMetrics(
+        string $shipClass,
+        string $jumpShipType,
+        ?string $bridgeChainType,
+        float $distanceLy
+    ): array {
+        $effectiveLy = $distanceLy * JumpShipType::fatigueDistanceMultiplier($shipClass, $jumpShipType, $bridgeChainType);
+        $lookupShipType = $jumpShipType !== '' ? $jumpShipType : $shipClass;
+        $lookupShipType = JumpShipType::normalizeJumpShipType($lookupShipType);
+        $bucketLy = $this->bucketLookupLy($effectiveLy);
+        if ($bucketLy === null) {
+            return $this->computeHopMetrics($effectiveLy);
+        }
+
+        $table = self::lookupTable();
+        $key = $this->formatLookupKey($bucketLy);
+        $byShip = $table[$lookupShipType] ?? null;
+        if ($byShip === null || !isset($byShip[$key])) {
+            return $this->computeHopMetrics($effectiveLy);
+        }
+
+        return $byShip[$key];
+    }
+
+    /**
+     * @return array{jump_activation_minutes: float, jump_fatigue_minutes: float, effective_ly: float}
+     */
+    public function lookupHopMetricsForShipType(string $shipType, float $distanceLy): array
+    {
+        return $this->lookupHopMetrics($shipType, $shipType, null, $distanceLy);
+    }
+
+    private static function lookupTable(): array
+    {
+        if (self::$lookupTable !== null) {
+            return self::$lookupTable;
+        }
+
+        $table = [];
+        foreach (JumpShipType::ALL as $shipType) {
+            $normalized = JumpShipType::normalizeJumpShipType($shipType);
+            $table[$normalized] = [];
+            for ($ly = self::LOOKUP_MIN_LY; $ly <= self::LOOKUP_MAX_LY + 0.0001; $ly += self::LOOKUP_STEP_LY) {
+                $roundedLy = round($ly, 1);
+                $table[$normalized][$thisKey = sprintf('%.1f', $roundedLy)] = self::computeHopMetrics($roundedLy);
+                $table[$normalized][$thisKey]['effective_ly'] = $roundedLy;
+            }
+        }
+
+        self::$lookupTable = $table;
+        return self::$lookupTable;
+    }
+
+    private function bucketLookupLy(float $effectiveLy): ?float
+    {
+        if ($effectiveLy < self::LOOKUP_MIN_LY) {
+            return self::LOOKUP_MIN_LY;
+        }
+        if ($effectiveLy > self::LOOKUP_MAX_LY) {
+            return null;
+        }
+        return round($effectiveLy / self::LOOKUP_STEP_LY) * self::LOOKUP_STEP_LY;
+    }
+
+    private function formatLookupKey(float $effectiveLy): string
+    {
+        return sprintf('%.1f', round($effectiveLy, 1));
+    }
+
+    /**
+     * @return array{jump_activation_minutes: float, jump_fatigue_minutes: float, effective_ly: float}
+     */
+    private static function computeHopMetrics(float $effectiveLy): array
+    {
+        $activation = min(self::MAX_COOLDOWN_MIN, max(1.0 + $effectiveLy, 0.0));
+        $fatigue = min(self::MAX_FATIGUE_MIN, max(10.0 * (1.0 + $effectiveLy), 0.0));
+
+        return [
+            'jump_activation_minutes' => $activation,
+            'jump_fatigue_minutes' => $fatigue,
+            'effective_ly' => $effectiveLy,
         ];
     }
 }
