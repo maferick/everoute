@@ -78,7 +78,7 @@ final class NavigationEngine
         );
 
         $best = $this->selectBest($gateRoute, $jumpRoute, $hybridRoute);
-        $explanation = $this->buildExplanation($best, $gateRoute, $jumpRoute, $hybridRoute);
+        $explanation = $this->buildExplanation($best, $gateRoute, $jumpRoute, $hybridRoute, $options);
         $payload = [
             'gate_route' => $gateRoute,
             'jump_route' => $jumpRoute,
@@ -1439,6 +1439,22 @@ final class NavigationEngine
                 $gateHops++;
             }
         }
+        $lowsecCount = 0;
+        $nullsecCount = 0;
+        $npcStationsInRoute = 0;
+        foreach ($systems as $system) {
+            $security = (float) ($system['security'] ?? 0.0);
+            if ($security >= 0.1 && $security < 0.5) {
+                $lowsecCount++;
+            } elseif ($security < 0.1) {
+                $nullsecCount++;
+            }
+            if (!empty($system['has_npc_station'])) {
+                $npcStationsInRoute++;
+            }
+        }
+        $systemCount = count($systems);
+        $npcStationRatio = $systemCount > 0 ? round($npcStationsInRoute / $systemCount, 3) : 0.0;
         return [
             'feasible' => true,
             'total_cost' => round($distance, 2),
@@ -1446,6 +1462,10 @@ final class NavigationEngine
             'total_jump_ly' => round($totalJumpLy, 2),
             'segments' => $segments,
             'systems' => $systems,
+            'lowsec_count' => $lowsecCount,
+            'nullsec_count' => $nullsecCount,
+            'npc_stations_in_route' => $npcStationsInRoute,
+            'npc_station_ratio' => $npcStationRatio,
         ];
     }
 
@@ -1491,7 +1511,7 @@ final class NavigationEngine
         return (string) array_key_first($candidates);
     }
 
-    private function buildExplanation(string $best, array $gate, array $jump, array $hybrid): array
+    private function buildExplanation(string $best, array $gate, array $jump, array $hybrid, array $options): array
     {
         if ($best === 'none') {
             return ['No feasible routes found.'];
@@ -1506,6 +1526,18 @@ final class NavigationEngine
         }
         if ($best === 'gate') {
             $reasons[] = 'Gate-only route avoids jump fatigue considerations.';
+        }
+        if (!empty($options['prefer_npc'])) {
+            $selected = match ($best) {
+                'gate' => $gate,
+                'jump' => $jump,
+                'hybrid' => $hybrid,
+                default => [],
+            };
+            $npcCount = (int) ($selected['npc_stations_in_route'] ?? 0);
+            if ($npcCount > 0) {
+                $reasons[] = sprintf('Selected %d systems with NPC stations (toggle enabled).', $npcCount);
+            }
         }
         return $reasons;
     }
