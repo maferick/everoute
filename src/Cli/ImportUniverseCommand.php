@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Everoute\Cli;
 
 use Everoute\Config\Env;
+use Everoute\Universe\SecurityStatus;
 use PDO;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -61,12 +62,18 @@ final class ImportUniverseCommand extends Command
     private function importSystems(PDO $pdo, array $systems): void
     {
         $now = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-        $stmt = $pdo->prepare('INSERT INTO systems (id, name, security, region_id, constellation_id, x, y, z, system_size_au, updated_at) VALUES (:id, :name, :security, :region_id, :constellation_id, :x, :y, :z, :system_size_au, :updated_at) ON DUPLICATE KEY UPDATE name=VALUES(name), security=VALUES(security), region_id=VALUES(region_id), constellation_id=VALUES(constellation_id), x=VALUES(x), y=VALUES(y), z=VALUES(z), system_size_au=VALUES(system_size_au), updated_at=VALUES(updated_at)');
+        $stmt = $pdo->prepare('INSERT INTO systems (id, name, security, security_raw, security_nav, region_id, constellation_id, x, y, z, system_size_au, updated_at) VALUES (:id, :name, :security, :security_raw, :security_nav, :region_id, :constellation_id, :x, :y, :z, :system_size_au, :updated_at) ON DUPLICATE KEY UPDATE name=VALUES(name), security=VALUES(security), security_raw=VALUES(security_raw), security_nav=VALUES(security_nav), region_id=VALUES(region_id), constellation_id=VALUES(constellation_id), x=VALUES(x), y=VALUES(y), z=VALUES(z), system_size_au=VALUES(system_size_au), updated_at=VALUES(updated_at)');
         foreach ($systems as $system) {
+            $securityRaw = (float) ($system['security_raw'] ?? $system['security'] ?? 0.0);
+            $securityNav = isset($system['security_nav'])
+                ? (float) $system['security_nav']
+                : SecurityStatus::navFromRaw($securityRaw);
             $stmt->execute([
                 'id' => $system['id'],
                 'name' => $system['name'],
-                'security' => $system['security'],
+                'security' => $securityNav,
+                'security_raw' => $securityRaw,
+                'security_nav' => $securityNav,
                 'region_id' => $system['region_id'] ?? null,
                 'constellation_id' => $system['constellation_id'] ?? null,
                 'x' => $system['x'] ?? 0,

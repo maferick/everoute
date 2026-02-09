@@ -141,11 +141,7 @@ final class NavigationEngine
                 'total_gates' => 0,
                 'total_jump_ly' => 0.0,
                 'segments' => [],
-                'systems' => [[
-                    'id' => $startId,
-                    'name' => $this->systems[$startId]['name'] ?? (string) $startId,
-                    'security' => (float) ($this->systems[$startId]['security'] ?? 0.0),
-                ]],
+                'systems' => [$this->systemSummary($startId)],
                 'nodes_explored' => 0,
                 'illegal_systems_filtered' => 0,
                 'preference' => $preference,
@@ -279,11 +275,7 @@ final class NavigationEngine
                 'total_gates' => 0,
                 'total_jump_ly' => 0.0,
                 'segments' => [],
-                'systems' => [[
-                    'id' => $startId,
-                    'name' => $this->systems[$startId]['name'] ?? (string) $startId,
-                    'security' => (float) ($this->systems[$startId]['security'] ?? 0.0),
-                ]],
+                'systems' => [$this->systemSummary($startId)],
                 'nodes_explored' => 0,
                 'illegal_systems_filtered' => 0,
             ];
@@ -411,11 +403,7 @@ final class NavigationEngine
                 'total_gates' => 0,
                 'total_jump_ly' => 0.0,
                 'segments' => [],
-                'systems' => [[
-                    'id' => $startId,
-                    'name' => $this->systems[$startId]['name'] ?? (string) $startId,
-                    'security' => (float) ($this->systems[$startId]['security'] ?? 0.0),
-                ]],
+                'systems' => [$this->systemSummary($startId)],
                 'nodes_explored' => 0,
                 'illegal_systems_filtered' => 0,
             ];
@@ -949,7 +937,7 @@ final class NavigationEngine
         return $diagnostics;
     }
 
-    /** @return array<int, array{name:string, security:float}> */
+    /** @return array<int, array{name:string, security:float, security_raw:float|null}> */
     private function formatNeighborSamples(array $neighborIds, int $limit): array
     {
         $samples = [];
@@ -961,6 +949,9 @@ final class NavigationEngine
             $samples[] = [
                 'name' => $system['name'] ?? (string) $neighborId,
                 'security' => (float) ($system['security'] ?? 0.0),
+                'security_raw' => $system !== null && array_key_exists('security_raw', $system)
+                    ? (float) $system['security_raw']
+                    : null,
             ];
         }
         return $samples;
@@ -1241,12 +1232,7 @@ final class NavigationEngine
         if ($segments !== []) {
             $startId = $segments[0]['from_id'] ?? null;
             if ($startId !== null && isset($this->systems[$startId])) {
-                $startSystem = $this->systems[$startId];
-                $systems[] = [
-                    'id' => $startId,
-                    'name' => $startSystem['name'],
-                    'security' => (float) $startSystem['security'],
-                ];
+                $systems[] = $this->systemSummary($startId);
             }
         }
         $totalJumpLy = 0.0;
@@ -1255,11 +1241,7 @@ final class NavigationEngine
             $toId = $segment['to_id'];
             $system = $this->systems[$toId] ?? null;
             if ($system) {
-                $systems[] = [
-                    'id' => $toId,
-                    'name' => $system['name'],
-                    'security' => (float) $system['security'],
-                ];
+                $systems[] = $this->systemSummary($toId);
             }
             if (($segment['type'] ?? 'gate') === 'jump') {
                 $totalJumpLy += (float) ($segment['distance_ly'] ?? 0.0);
@@ -1274,6 +1256,18 @@ final class NavigationEngine
             'total_jump_ly' => round($totalJumpLy, 2),
             'segments' => $segments,
             'systems' => $systems,
+        ];
+    }
+
+    private function systemSummary(int $systemId): array
+    {
+        $system = $this->systems[$systemId] ?? [];
+
+        return [
+            'id' => $systemId,
+            'name' => $system['name'] ?? (string) $systemId,
+            'security' => (float) ($system['security'] ?? 0.0),
+            'security_raw' => array_key_exists('security_raw', $system) ? (float) $system['security_raw'] : null,
         ];
     }
 

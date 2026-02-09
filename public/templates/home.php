@@ -233,7 +233,10 @@ $tabs = [
                                     <?php foreach ($route['systems'] as $system): ?>
                                         <li>
                                             <?= htmlspecialchars($system['name'], ENT_QUOTES) ?>
-                                            <span class="badge">Sec <?= $system['security'] ?></span>
+                                            <?php $securityRaw = $system['security_raw'] ?? null; ?>
+                                            <span class="badge"<?= $securityRaw !== null ? ' title="Raw sec: ' . htmlspecialchars((string) $securityRaw, ENT_QUOTES) . '"' : '' ?>>
+                                                Sec <?= htmlspecialchars((string) $system['security'], ENT_QUOTES) ?>
+                                            </span>
                                             <?php if ($system['chokepoint']): ?><span class="badge danger">Chokepoint</span><?php endif; ?>
                                             <?php if ($system['npc_station']): ?><span class="badge">NPC station</span><?php endif; ?>
                                             <span class="badge">Risk <?= round($system['risk'], 1) ?></span>
@@ -290,7 +293,10 @@ $tabs = [
                                     <li>
                                         <?= htmlspecialchars($system['name'] ?? 'Unknown', ENT_QUOTES) ?>
                                         <?php if (isset($system['security'])): ?>
-                                            <span class="badge">Sec <?= htmlspecialchars((string) $system['security'], ENT_QUOTES) ?></span>
+                                            <?php $securityRaw = $system['security_raw'] ?? null; ?>
+                                            <span class="badge"<?= $securityRaw !== null ? ' title="Raw sec: ' . htmlspecialchars((string) $securityRaw, ENT_QUOTES) . '"' : '' ?>>
+                                                Sec <?= htmlspecialchars((string) $system['security'], ENT_QUOTES) ?>
+                                            </span>
                                         <?php endif; ?>
                                     </li>
                                 <?php endforeach; ?>

@@ -43,9 +43,9 @@ function buildPlannerAndSystems(array $systemsData): array
 {
     $connection = new Connection('sqlite::memory:', '', '');
     $pdo = $connection->pdo();
-    $pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, region_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
+    $pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, security_raw REAL, security_nav REAL, region_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
 
-    $stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     foreach ($systemsData as $row) {
         $stmt->execute($row);
     }
@@ -90,9 +90,9 @@ $jumpFreighterOptions = [
 ];
 
 [$planner, $systems] = buildPlannerAndSystems([
-    [1, 'Start', 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [2, 'MidSafe', 0.2, 1, 0, 0, 1.0, 6.9 * $metersPerLy, 0.0, 0.0],
-    [3, 'End', 0.2, 1, 0, 0, 1.0, 13.8 * $metersPerLy, 0.0, 0.0],
+    [1, 'Start', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [2, 'MidSafe', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 6.9 * $metersPerLy, 0.0, 0.0],
+    [3, 'End', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 13.8 * $metersPerLy, 0.0, 0.0],
 ]);
 
 $plan = $planner->plan(1, 3, $systems, [], $carrierOptions, [], []);
@@ -106,10 +106,10 @@ foreach ($plan['segments'] ?? [] as $segment) {
 }
 
 [$planner, $systems] = buildPlannerAndSystems([
-    [1, 'Start', 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [2, 'MidHigh', 0.6, 1, 0, 0, 1.0, 6.5 * $metersPerLy, 0.0, 0.0],
-    [3, 'MidLow', 0.2, 1, 0, 0, 1.0, 6.8 * $metersPerLy, 0.0, 0.0],
-    [4, 'End', 0.2, 1, 0, 0, 1.0, 13.6 * $metersPerLy, 0.0, 0.0],
+    [1, 'Start', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [2, 'MidHigh', 0.6, 0.6, 0.6, 1, 0, 0, 1.0, 6.5 * $metersPerLy, 0.0, 0.0],
+    [3, 'MidLow', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 6.8 * $metersPerLy, 0.0, 0.0],
+    [4, 'End', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 13.6 * $metersPerLy, 0.0, 0.0],
 ]);
 
 $plan = $planner->plan(1, 4, $systems, [], $carrierOptions, [], []);
@@ -121,9 +121,9 @@ if (in_array('MidHigh', $plan['midpoints'] ?? [], true)) {
 }
 
 [$planner, $systems] = buildPlannerAndSystems([
-    [1, 'Start', 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [2, 'MidLow', 0.2, 1, 0, 0, 1.0, 8 * $metersPerLy, 0.0, 0.0],
-    [3, 'HighEnd', 0.6, 1, 0, 0, 1.0, 16 * $metersPerLy, 0.0, 0.0],
+    [1, 'Start', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [2, 'MidLow', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 8 * $metersPerLy, 0.0, 0.0],
+    [3, 'HighEnd', 0.6, 0.6, 0.6, 1, 0, 0, 1.0, 16 * $metersPerLy, 0.0, 0.0],
 ]);
 
 $plan = $planner->plan(1, 3, $systems, [], $jumpFreighterOptions, [], []);
@@ -135,9 +135,9 @@ if (in_array('HighEnd', $plan['midpoints'] ?? [], true)) {
 }
 
 [$planner, $systems] = buildPlannerAndSystems([
-    [1, 'Start', 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [2, 'MidHigh', 0.6, 1, 0, 0, 1.0, 7 * $metersPerLy, 0.0, 0.0],
-    [3, 'End', 0.2, 1, 0, 0, 1.0, 14 * $metersPerLy, 0.0, 0.0],
+    [1, 'Start', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [2, 'MidHigh', 0.6, 0.6, 0.6, 1, 0, 0, 1.0, 7 * $metersPerLy, 0.0, 0.0],
+    [3, 'End', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 14 * $metersPerLy, 0.0, 0.0],
 ]);
 
 $plan = $planner->plan(1, 3, $systems, [], $carrierOptions, [], []);
