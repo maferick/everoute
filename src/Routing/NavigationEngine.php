@@ -456,7 +456,8 @@ final class NavigationEngine
             $route = $this->computeHybridRouteAttempt($startId, $endId, $shipType, $effectiveRange, $rangeBucket, $relaxedOptions);
             $fallbackUsed = true;
         }
-        return $this->withRouteMeta($route, $fallbackUsed);
+        $route = $this->withRouteMeta($route, $fallbackUsed);
+        return $this->withHybridFatigueDetails($route, $options);
     }
 
     private function computeHybridRouteAttempt(
@@ -922,6 +923,20 @@ final class NavigationEngine
         $route['fallback_used'] = $fallbackUsed;
         $systems = is_array($route['systems'] ?? null) ? $route['systems'] : [];
         $route['space_types'] = $this->spaceTypesUsed($systems);
+        return $route;
+    }
+
+    private function withHybridFatigueDetails(array $route, array $options): array
+    {
+        if (!array_key_exists('fatigue', $route)) {
+            $route['fatigue'] = $this->fatigueModel->evaluate([], $options);
+        }
+        $waitDefaults = $this->buildJumpWaitDetails([], $options);
+        foreach ($waitDefaults as $key => $value) {
+            if (!array_key_exists($key, $route)) {
+                $route[$key] = $value;
+            }
+        }
         return $route;
     }
 
