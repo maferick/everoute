@@ -8,6 +8,7 @@ use Everoute\Routing\JumpMath;
 use Everoute\Routing\JumpNeighborGraphBuilder;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Universe\PrecomputeCheckpointRepository;
+use Everoute\Universe\JumpNeighborValidator;
 use Everoute\Universe\SystemRepository;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -72,34 +73,47 @@ final class PrecomputeJumpNeighborsCommand extends Command
         $startedAt = microtime(true);
         $totalStoredBytes = 0;
 
-        $this->purgeUnsupportedRanges($output, $pdo, max($ranges), $rangeColumn);
+        $maxRange = max($ranges);
+        $this->purgeUnsupportedRanges($output, $pdo, $maxRange, $rangeColumn);
 
-        foreach ($ranges as $rangeLy) {
-            $jobKey = 'jump_neighbors:' . $rangeLy;
-            if (!$resume) {
-                $output->writeln(sprintf('<comment>Clearing jump_neighbors for %d LY...</comment>', $rangeLy));
-                $stmt = $pdo->prepare(sprintf('DELETE FROM jump_neighbors WHERE %s = :range', $rangeColumn));
-                $stmt->execute(['range' => $rangeLy]);
-                $checkpointRepo->clear($jobKey);
+        $jobKey = 'jump_neighbors:cumulative:' . implode('-', $ranges);
+        if (!$resume) {
+            $this->clearRanges($output, $pdo, $rangeColumn, $ranges);
+            $checkpointRepo->clear($jobKey);
+        }
+
+        $cursor = $resume ? $checkpointRepo->getCursor($jobKey) : null;
+        $rangeMeters = $maxRange * JumpMath::METERS_PER_LY;
+        $bucketIndex = $builder->buildSpatialBuckets($systems, $rangeMeters);
+        $processed = 0;
+
+        $output->writeln(sprintf('<info>Computing cumulative jump neighbors up to %d LY...</info>', $maxRange));
+
+        foreach ($systemIds as $systemId) {
+            if ($cursor !== null && $systemId <= $cursor) {
+                continue;
             }
 
-            $cursor = $resume ? $checkpointRepo->getCursor($jobKey) : null;
-            $rangeMeters = $rangeLy * JumpMath::METERS_PER_LY;
-            $bucketIndex = $builder->buildSpatialBuckets($systems, $rangeMeters);
-            $processed = 0;
+            $system = $systems[$systemId];
+            $neighbors = $builder->buildNeighborsForSystem($system, $systems, $bucketIndex, $rangeMeters);
+            $neighborIdsByRange = $this->buildCumulativeNeighbors($neighbors, $ranges, $neighborCap);
 
-            $output->writeln(sprintf('<info>Computing jump neighbors for %d LY...</info>', $rangeLy));
-
-            foreach ($systemIds as $systemId) {
-                if ($cursor !== null && $systemId <= $cursor) {
-                    continue;
+            $prevCount = null;
+            foreach ($ranges as $rangeLy) {
+                $neighborIds = $neighborIdsByRange[$rangeLy];
+                $count = count($neighborIds);
+                if ($prevCount !== null && $count < $prevCount) {
+                    $output->writeln(sprintf(
+                        '<error>Neighbor count decreased for system %d at %d LY (prev=%d, count=%d).</error>',
+                        $systemId,
+                        $rangeLy,
+                        $prevCount,
+                        $count
+                    ));
+                    return Command::FAILURE;
                 }
+                $prevCount = $count;
 
-                $system = $systems[$systemId];
-                $neighbors = $builder->buildNeighborsForSystem($system, $systems, $bucketIndex, $rangeMeters);
-                $neighbors = $this->capNeighbors($neighbors, $neighborCap, $output, $systemId, $rangeLy);
-                $neighborIds = array_map('intval', array_keys($neighbors));
-                sort($neighborIds);
                 $payload = gzcompress($this->packNeighborIds($neighborIds));
                 $payloadBytes = is_string($payload) ? strlen($payload) : 0;
                 $totalStoredBytes += $payloadBytes;
@@ -138,32 +152,50 @@ final class PrecomputeJumpNeighborsCommand extends Command
                 $params = [
                     'system_id' => $systemId,
                     'range_ly' => $rangeLy,
-                    'neighbor_count' => count($neighborIds),
+                    'neighbor_count' => $count,
                     'payload' => $payload,
                 ];
                 if ($rangeBucketColumn !== null) {
                     $params['range_bucket'] = $rangeLy;
                 }
                 $stmt->execute($params);
-
-                $processed++;
-                $checkpointRepo->updateCursor($jobKey, $systemId);
-
-                if ($processed % 50 === 0 || $processed === $totalSystems) {
-                    $this->reportProgress($output, $processed, $totalSystems, $startedAt, (string) $rangeLy);
-                }
-
-                if ($sleepSeconds > 0) {
-                    usleep((int) ($sleepSeconds * 1_000_000));
-                }
-
-                if ($hours > 0 && (microtime(true) - $startedAt) >= ($hours * 3600)) {
-                    $output->writeln('<comment>Time limit reached, stopping for resume.</comment>');
-                    return Command::SUCCESS;
-                }
             }
 
-            $this->reportProgress($output, $processed, $totalSystems, $startedAt, (string) $rangeLy);
+            $processed++;
+            $checkpointRepo->updateCursor($jobKey, $systemId);
+
+            if ($processed % 50 === 0 || $processed === $totalSystems) {
+                $this->reportProgress($output, $processed, $totalSystems, $startedAt, sprintf('<=%d', $maxRange));
+            }
+
+            if ($sleepSeconds > 0) {
+                usleep((int) ($sleepSeconds * 1_000_000));
+            }
+
+            if ($hours > 0 && (microtime(true) - $startedAt) >= ($hours * 3600)) {
+                $output->writeln('<comment>Time limit reached, stopping for resume.</comment>');
+                return Command::SUCCESS;
+            }
+        }
+
+        $this->reportProgress($output, $processed, $totalSystems, $startedAt, sprintf('<=%d', $maxRange));
+
+        $validator = new JumpNeighborValidator($connection);
+        $completeness = $validator->validateCompleteness($ranges);
+        if ($completeness['missing_rows_found'] > 0) {
+            $output->writeln(sprintf(
+                '<error>Missing jump neighbor rows for %d systems.</error>',
+                $completeness['missing_rows_found']
+            ));
+            foreach ($completeness['missing'] as $systemId => $missingCount) {
+                $output->writeln(sprintf(
+                    '<error>System %d missing %d rows (expected %d).</error>',
+                    $systemId,
+                    $missingCount,
+                    count($ranges)
+                ));
+            }
+            return Command::FAILURE;
         }
 
         $output->writeln('<info>Jump neighbor precompute complete.</info>');
@@ -235,6 +267,64 @@ final class PrecomputeJumpNeighborsCommand extends Command
                 $maxRange
             ));
         }
+    }
+
+    /** @param int[] $ranges */
+    private function clearRanges(OutputInterface $output, \PDO $pdo, string $rangeColumn, array $ranges): void
+    {
+        if ($ranges === []) {
+            return;
+        }
+        $placeholders = implode(', ', array_fill(0, count($ranges), '?'));
+        $output->writeln(sprintf(
+            '<comment>Clearing jump_neighbors for ranges: %s...</comment>',
+            implode(', ', $ranges)
+        ));
+        $stmt = $pdo->prepare(sprintf('DELETE FROM jump_neighbors WHERE %s IN (%s)', $rangeColumn, $placeholders));
+        $stmt->execute(array_values($ranges));
+    }
+
+    /**
+     * @param array<int, float> $neighbors
+     * @param int[] $ranges
+     * @return array<int, int[]>
+     */
+    private function buildCumulativeNeighbors(array $neighbors, array $ranges, int $cap): array
+    {
+        if ($neighbors === []) {
+            $empty = [];
+            foreach ($ranges as $rangeLy) {
+                $empty[$rangeLy] = [];
+            }
+            return $empty;
+        }
+
+        asort($neighbors, SORT_NUMERIC);
+        $neighborIds = array_keys($neighbors);
+        $neighborDistances = array_values($neighbors);
+        $totalNeighbors = count($neighbors);
+        $index = 0;
+        $cumulative = [];
+        $results = [];
+
+        foreach ($ranges as $rangeLy) {
+            while ($index < $totalNeighbors && $neighborDistances[$index] <= $rangeLy) {
+                $cumulative[$neighborIds[$index]] = $neighborDistances[$index];
+                $index++;
+            }
+
+            $selected = $cumulative;
+            if (count($selected) > $cap) {
+                asort($selected, SORT_NUMERIC);
+                $selected = array_slice($selected, 0, $cap, true);
+            }
+
+            $ids = array_map('intval', array_keys($selected));
+            sort($ids);
+            $results[$rangeLy] = $ids;
+        }
+
+        return $results;
     }
 
     private function reportProgress(OutputInterface $output, int $processed, int $total, float $startedAt, string $label): void

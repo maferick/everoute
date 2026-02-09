@@ -113,6 +113,7 @@ $engine = new NavigationEngine(
 $optionsCarrier = [
     'from' => '1-SMEB',
     'to' => 'Eurgrana',
+    'mode' => 'capital',
     'jump_ship_type' => 'carrier',
     'jump_skill_level' => 5,
     'safety_vs_speed' => 50,
@@ -138,6 +139,7 @@ foreach ($jumpSegments as $segment) {
 $optionsJf = [
     'from' => '1-SMEB',
     'to' => 'Highsec-B',
+    'mode' => 'capital',
     'jump_ship_type' => 'jump_freighter',
     'jump_skill_level' => 5,
     'safety_vs_speed' => 50,

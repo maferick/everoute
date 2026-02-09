@@ -462,7 +462,7 @@ final class JumpPlanner
         if ($bucket < 1) {
             return null;
         }
-        $bucketValue = (float) $bucket;
+        $bucketValue = (float) min(10, $bucket);
         return in_array($bucketValue, $this->jumpRangeBuckets, true) ? $bucketValue : null;
     }
 
