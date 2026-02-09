@@ -64,11 +64,16 @@ CREATE TABLE IF NOT EXISTS stations (
 
 CREATE TABLE IF NOT EXISTS system_risk (
     system_id BIGINT PRIMARY KEY,
+    ship_kills_1h INT NOT NULL DEFAULT 0,
+    pod_kills_1h INT NOT NULL DEFAULT 0,
+    npc_kills_1h INT NOT NULL DEFAULT 0,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    risk_updated_at DATETIME NULL,
     kills_last_1h INT NOT NULL DEFAULT 0,
     kills_last_24h INT NOT NULL DEFAULT 0,
     pod_kills_last_1h INT NOT NULL DEFAULT 0,
     pod_kills_last_24h INT NOT NULL DEFAULT 0,
-    last_updated_at DATETIME NOT NULL,
+    last_updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_risk_system FOREIGN KEY (system_id) REFERENCES systems (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -114,6 +119,14 @@ CREATE TABLE IF NOT EXISTS risk_import_jobs (
     started_at DATETIME NULL,
     finished_at DATETIME NULL,
     message TEXT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS risk_meta (
+    provider VARCHAR(64) PRIMARY KEY,
+    etag VARCHAR(255) NULL,
+    last_modified DATETIME NULL,
+    checked_at DATETIME NULL,
+    updated_at DATETIME NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sde_meta (

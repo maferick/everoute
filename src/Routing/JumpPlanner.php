@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Everoute\Routing;
 
 use Everoute\Config\Env;
+use Everoute\Risk\RiskScorer;
 use Everoute\Security\Logger;
 use Everoute\Universe\JumpNeighborRepository;
 
@@ -396,14 +397,15 @@ final class JumpPlanner
         $heuristic = function (int $node) use ($systems, $endId): float {
             return $this->heuristic($systems[$node], $systems[$endId]);
         };
+        $riskScorer = new RiskScorer();
         $allowFn = function (int $node) use ($systems, $options, $jumpHighSecRestricted, $endId): bool {
             $system = $systems[$node] ?? null;
             return $system !== null && $this->checkJumpNodeAllowed($node, $endId, $system, $options, $jumpHighSecRestricted);
         };
-        $costFn = function (int $from, int $to, mixed $edgeData) use ($rangeMeters, $risk, $systems, $npcStationIds, $options): float {
+        $costFn = function (int $from, int $to, mixed $edgeData) use ($rangeMeters, $risk, $systems, $npcStationIds, $options, $riskScorer): float {
             $distanceLy = (float) ($edgeData ?? 0.0);
             $tentative = 1.0 + ($distanceLy / max(0.1, $rangeMeters / JumpMath::METERS_PER_LY));
-            $riskScore = ($risk[$to]['kills_last_24h'] ?? 0) + ($risk[$to]['pod_kills_last_24h'] ?? 0);
+            $riskScore = $riskScorer->penalty($risk[$to] ?? []);
             $npcBonus = $this->npcBonus($systems[$to], $npcStationIds, $options);
             $avoidPenalty = $this->avoidPenalty($systems[$to], $options);
             return $tentative + ($riskScore * 0.05) - $npcBonus + $avoidPenalty;

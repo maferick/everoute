@@ -236,7 +236,7 @@ if (!empty($engineRoutes['Gate']['segments'])) {
             <div class="results-header">
                 <h2>Results</h2>
                 <?php if ($hasResult): ?>
-                    <div class="meta">Risk data updated: <?= htmlspecialchars((string) ($result['risk_updated_at'] ?? 'n/a'), ENT_QUOTES) ?></div>
+                    <div class="meta">CCP ESI system kills (last hour) — updated: <?= htmlspecialchars((string) ($result['risk_updated_at'] ?? 'n/a'), ENT_QUOTES) ?></div>
                 <?php endif; ?>
             </div>
 
@@ -244,6 +244,7 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                 <?php if ($best && $best !== 'none'): ?>
                     <p class="muted">Best option: <?= htmlspecialchars($best, ENT_QUOTES) ?></p>
                 <?php endif; ?>
+                <p class="muted">Risk is based on ship/pod kills in the last hour from CCP ESI; systems not listed are treated as zero.</p>
 
                 <div class="route-grid">
                     <?php foreach ($engineRoutes as $label => $route): ?>

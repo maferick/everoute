@@ -48,7 +48,9 @@ final class RiskRepository
             }
         }
 
-        $stmt = $this->connection->pdo()->query('SELECT system_id, kills_last_1h, kills_last_24h, pod_kills_last_1h, pod_kills_last_24h, last_updated_at FROM system_risk');
+        $stmt = $this->connection->pdo()->query(
+            'SELECT system_id, ship_kills_1h, pod_kills_1h, npc_kills_1h, updated_at, risk_updated_at, kills_last_1h, kills_last_24h, pod_kills_last_1h, pod_kills_last_24h, last_updated_at FROM system_risk'
+        );
         $rows = $stmt->fetchAll();
 
         if ($this->cache) {
@@ -59,21 +61,36 @@ final class RiskRepository
         return $rows;
     }
 
-    public function getLatestUpdate(): ?string
+    public function getLatestUpdate(?string $provider = null): ?string
     {
+        $cacheKey = $provider ? 'risk:latest_update:' . $provider : 'risk:latest_update';
         if ($this->cache) {
-            $cached = $this->cache->get('risk:latest_update');
+            $cached = $this->cache->get($cacheKey);
             if ($cached !== null) {
                 return $cached;
             }
         }
 
-        $stmt = $this->connection->pdo()->query('SELECT MAX(last_updated_at) as latest FROM system_risk');
-        $row = $stmt->fetch();
-        $latest = $row['latest'] ?? null;
+        $latest = null;
+        if ($provider) {
+            $stmt = $this->connection->pdo()->prepare('SELECT last_modified, updated_at FROM risk_meta WHERE provider = :provider');
+            $stmt->execute(['provider' => $provider]);
+            $row = $stmt->fetch();
+            if (is_array($row)) {
+                $latest = $row['last_modified'] ?? $row['updated_at'] ?? null;
+            }
+        }
+
+        if ($latest === null) {
+            $stmt = $this->connection->pdo()->query(
+                'SELECT MAX(COALESCE(risk_updated_at, last_updated_at, updated_at)) as latest FROM system_risk'
+            );
+            $row = $stmt->fetch();
+            $latest = $row['latest'] ?? null;
+        }
 
         if ($latest && $this->cache) {
-            $this->cache->set('risk:latest_update', (string) $latest, $this->cacheTtlSeconds);
+            $this->cache->set($cacheKey, (string) $latest, $this->cacheTtlSeconds);
         }
 
         return $latest;

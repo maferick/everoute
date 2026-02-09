@@ -64,7 +64,7 @@ final class RiskIngestCommand extends Command
         $logger->info('risk_ingest_started', [
             'queue_id' => $queueId,
             'ttw' => $ttw,
-            'provider' => Env::get('RISK_PROVIDER', 'manual'),
+            'provider' => Env::get('RISK_PROVIDER', 'esi_system_kills'),
         ]);
 
         while (true) {
