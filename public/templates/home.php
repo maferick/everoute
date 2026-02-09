@@ -280,11 +280,18 @@ $tabs = [
                         <?php endif; ?>
                         <?php if (!empty($route['segments'])): ?>
                             <p>
-                                <?= htmlspecialchars(implode(' → ', array_map(
-                                    static fn ($seg) => $seg['from'] ?? '',
+                                <?= htmlspecialchars(implode(', ', array_map(
+                                    static function (array $seg): string {
+                                        $from = $seg['from'] ?? '';
+                                        $to = $seg['to'] ?? '';
+                                        $distance = $seg['distance_ly'] ?? null;
+                                        if (($seg['type'] ?? 'gate') === 'jump' && $distance !== null) {
+                                            return sprintf('%s → %s (%.2f LY)', $from, $to, $distance);
+                                        }
+                                        return sprintf('%s → %s', $from, $to);
+                                    },
                                     $route['segments']
                                 )), ENT_QUOTES) ?>
-                                → <?= htmlspecialchars((string) ($route['segments'][count($route['segments']) - 1]['to'] ?? ''), ENT_QUOTES) ?>
                             </p>
                         <?php endif; ?>
                         <?php if (!empty($route['systems'])): ?>
