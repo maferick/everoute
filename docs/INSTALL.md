@@ -9,7 +9,7 @@
 ```bash
 composer install --no-dev
 cp .env.example .env
-php bin/console install --admin-user root --admin-pass <password>
+php bin/console install
 php bin/console sde:install
 php bin/console precompute:system-facts
 php bin/console jump:precompute --hours=1

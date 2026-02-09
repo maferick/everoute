@@ -24,8 +24,6 @@ final class InstallCommand extends Command
             ->setDescription('Install Everoute database and user')
             ->addOption('schema-only', null, InputOption::VALUE_NONE, 'Apply schema and seed only')
             ->addOption('reset', null, InputOption::VALUE_NONE, 'Drop and recreate the database before applying schema')
-            ->addOption('admin-user', null, InputOption::VALUE_REQUIRED, 'Admin DB user')
-            ->addOption('admin-pass', null, InputOption::VALUE_REQUIRED, 'Admin DB password')
             ->addOption('db-host', null, InputOption::VALUE_REQUIRED, 'DB host', Env::get('DB_HOST', '127.0.0.1'))
             ->addOption('db-port', null, InputOption::VALUE_REQUIRED, 'DB port', (string) Env::int('DB_PORT', 3306))
             ->addOption('db-name', null, InputOption::VALUE_REQUIRED, 'DB name', Env::get('DB_NAME', 'everoute'))
@@ -62,15 +60,8 @@ final class InstallCommand extends Command
         }
 
         if (!$schemaOnly || $reset) {
-            $adminUser = (string) $input->getOption('admin-user');
-            $adminPass = (string) $input->getOption('admin-pass');
-            if ($adminUser === '' || $adminPass === '') {
-                $output->writeln('<error>Admin credentials are required for full install or reset.</error>');
-                return Command::FAILURE;
-            }
-
             $adminDsn = sprintf('mysql:host=%s;port=%d;charset=utf8mb4', $dbHost, $dbPort);
-            $adminPdo = new PDO($adminDsn, $adminUser, $adminPass, [
+            $adminPdo = new PDO($adminDsn, $appUser, $appPass, [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             ]);
 
