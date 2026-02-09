@@ -51,7 +51,7 @@ final class NavigationEngine
         $shipType = $this->resolveShipType($options);
         $jumpSkillLevel = (int) ($options['jump_skill_level'] ?? 0);
         $effectiveRange = $this->jumpRangeCalculator->effectiveRange($shipType, $jumpSkillLevel);
-        $rangeBucket = $effectiveRange !== null ? (int) floor($effectiveRange) : null;
+        $rangeBucket = $this->resolveRangeBucket($effectiveRange);
         $debugEnabled = Env::bool('APP_DEBUG', false) || !empty($options['debug']);
 
         $gateRoute = $this->computeGateRoute($start['id'], $end['id'], $shipType, $options);
@@ -291,6 +291,14 @@ final class NavigationEngine
             ];
         }
 
+        $debugLogs = $this->isJumpDebugEnabled($options);
+        if ($debugLogs) {
+            $this->logger->debug('Jump route bucket selection', [
+                'effective_range_ly' => $effectiveRange,
+                'bucket' => $rangeBucket,
+            ]);
+        }
+
         $neighbors = $this->jumpNeighborRepo->loadRangeBucket($rangeBucket, count($this->systems));
         if ($neighbors === null) {
             return [
@@ -301,7 +309,13 @@ final class NavigationEngine
             ];
         }
 
-        $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options);
+        $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, $debugLogs);
+        if ($debugLogs && $graph['debug_sample'] !== []) {
+            $this->logger->debug('Jump neighbor sample', [
+                'bucket' => $rangeBucket,
+                'samples' => $graph['debug_sample'],
+            ]);
+        }
         if (!isset($graph['neighbors'][$startId]) || !isset($graph['neighbors'][$endId])) {
             return [
                 'feasible' => false,
@@ -330,6 +344,9 @@ final class NavigationEngine
         );
 
         if ($result['path'] === [] || ($result['path'][count($result['path']) - 1] ?? null) !== $endId) {
+            if ($debugLogs) {
+                $this->runJumpDiagnostics($startId, $endId, $shipType, $options, $rangeBucket);
+            }
             return [
                 'feasible' => false,
                 'reason' => 'No jump route found.',
@@ -340,6 +357,9 @@ final class NavigationEngine
 
         $segments = $this->buildSegments($result['path'], $result['edges'], $shipType);
         if (!$this->validateRoute($segments, $shipType, $effectiveRange)) {
+            if ($debugLogs) {
+                $this->runJumpDiagnostics($startId, $endId, $shipType, $options, $rangeBucket);
+            }
             return [
                 'feasible' => false,
                 'reason' => 'Jump route failed validation.',
@@ -407,7 +427,7 @@ final class NavigationEngine
         }
 
         $gateGraph = $this->buildGateGraph($startId, $endId, $shipType, $options);
-        $jumpGraph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options);
+        $jumpGraph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, false);
         $graph = $this->mergeGraphs($gateGraph['neighbors'], $jumpGraph['neighbors']);
         $filtered = $gateGraph['filtered'] + $jumpGraph['filtered'];
 
@@ -512,10 +532,20 @@ final class NavigationEngine
     }
 
     /** @param array<int, int[]> $precomputed */
-    private function buildJumpGraph(array $precomputed, int $startId, int $endId, string $shipType, array $options): array
+    private function buildJumpGraph(
+        array $precomputed,
+        int $startId,
+        int $endId,
+        string $shipType,
+        array $options,
+        bool $debugLogs
+    ): array
     {
         $neighbors = [];
         $filtered = 0;
+        $debugSample = [];
+        $sampleLimit = $debugLogs ? 6 : 0;
+        $sampled = 0;
         foreach ($precomputed as $from => $toList) {
             if (!isset($this->systems[$from])) {
                 continue;
@@ -525,6 +555,7 @@ final class NavigationEngine
                 $filtered++;
                 continue;
             }
+            $filteredForNode = 0;
             foreach ($toList as $to) {
                 if (!isset($this->systems[$to])) {
                     continue;
@@ -532,6 +563,7 @@ final class NavigationEngine
                 $toIsMidpoint = $to !== $startId && $to !== $endId;
                 if (!$this->isSystemAllowedForRoute($shipType, $this->systems[$to], $toIsMidpoint, $options)) {
                     $filtered++;
+                    $filteredForNode++;
                     continue;
                 }
                 $neighbors[$from][] = [
@@ -539,6 +571,14 @@ final class NavigationEngine
                     'type' => 'jump',
                     'distance_ly' => JumpMath::distanceLy($this->systems[$from], $this->systems[$to]),
                 ];
+            }
+            if ($debugLogs && $sampled < $sampleLimit) {
+                $debugSample[] = [
+                    'system_id' => $from,
+                    'fetched_neighbor_count' => count($toList),
+                    'filtered_illegal_count' => $filteredForNode,
+                ];
+                $sampled++;
             }
         }
         foreach ([$startId, $endId] as $endpointId) {
@@ -550,7 +590,7 @@ final class NavigationEngine
             }
         }
 
-        return ['neighbors' => $neighbors, 'filtered' => $filtered];
+        return ['neighbors' => $neighbors, 'filtered' => $filtered, 'debug_sample' => $debugSample];
     }
 
     /** @param array<int, array<int, array<string, mixed>>> $gate */
@@ -647,6 +687,75 @@ final class NavigationEngine
             'avoid_lowsec' => !empty($options['avoid_lowsec']),
             'avoid_nullsec' => !empty($options['avoid_nullsec']),
         ];
+    }
+
+    private function resolveRangeBucket(?float $effectiveRange): ?int
+    {
+        if ($effectiveRange === null) {
+            return null;
+        }
+        $bucket = (int) floor($effectiveRange);
+        if ($bucket < 1) {
+            return null;
+        }
+        return min(10, $bucket);
+    }
+
+    private function isJumpDebugEnabled(array $options): bool
+    {
+        $logLevel = strtolower((string) Env::get('LOG_LEVEL', ''));
+        return Env::bool('ROUTE_DEBUG', false) || $logLevel === 'debug' || !empty($options['debug']);
+    }
+
+    private function runJumpDiagnostics(int $startId, int $endId, string $shipType, array $options, int $rangeBucket): void
+    {
+        $buckets = [$rangeBucket - 1, $rangeBucket - 2];
+        foreach ($buckets as $bucket) {
+            if ($bucket < 1 || $bucket > 10) {
+                continue;
+            }
+            $neighbors = $this->jumpNeighborRepo->loadRangeBucket($bucket, count($this->systems));
+            if ($neighbors === null) {
+                $this->logger->debug('Jump diagnostic missing neighbors', [
+                    'bucket' => $bucket,
+                ]);
+                continue;
+            }
+            $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, false);
+            if (!isset($graph['neighbors'][$startId]) || !isset($graph['neighbors'][$endId])) {
+                $this->logger->debug('Jump diagnostic filtered endpoints', [
+                    'bucket' => $bucket,
+                    'filtered' => $graph['filtered'],
+                ]);
+                continue;
+            }
+
+            $dijkstra = new Dijkstra();
+            $this->riskWeightCache = $this->riskWeight($options);
+            $result = $dijkstra->shortestPath(
+                $graph['neighbors'],
+                $startId,
+                $endId,
+                function (int $from, int $to, mixed $edgeData): float {
+                    $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
+                    $fatigue = 5.0 + ($distance * 6.0);
+                    $cooldown = max(1.0, $distance * 1.0);
+                    $riskScore = $this->riskScore($to);
+                    return $distance + $fatigue + $cooldown + ($riskScore * $this->riskWeightCache);
+                },
+                null,
+                null,
+                20000
+            );
+
+            $feasible = $result['path'] !== [] && ($result['path'][count($result['path']) - 1] ?? null) === $endId;
+            $this->logger->debug('Jump diagnostic search', [
+                'bucket' => $bucket,
+                'feasible' => $feasible,
+                'nodes_explored' => $result['nodes_explored'] ?? 0,
+                'filtered' => $graph['filtered'],
+            ]);
+        }
     }
 
     /** @return array{allowed: ?array<int, bool>, filtered: int, exception: array<string, array<string, int|bool>>, reason: ?string} */
