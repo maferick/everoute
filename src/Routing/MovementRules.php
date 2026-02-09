@@ -8,13 +8,15 @@ final class MovementRules
 {
     public const HIGH_SEC_MIN = 0.5;
     private const LOW_SEC_MIN = 0.1;
+    /** @var array<string, string> */
+    private array $spaceTypeCache = [];
 
     public function isCapitalRestricted(array $options): bool
     {
-        $shipClass = (string) ($options['ship_class'] ?? '');
+        $shipClass = JumpShipType::normalizeJumpShipType((string) ($options['ship_class'] ?? ''));
         $jumpShipType = JumpShipType::normalizeJumpShipType((string) ($options['jump_ship_type'] ?? ''));
 
-        if (in_array($shipClass, ['capital', 'super', 'titan'], true)) {
+        if ($shipClass === 'capital' || in_array($shipClass, JumpShipType::CAPITALS, true)) {
             return true;
         }
 
@@ -32,33 +34,48 @@ final class MovementRules
 
     public function getSystemSpaceType(array $system): string
     {
+        $cacheKey = (string) ($system['id'] ?? $system['system_id'] ?? $system['name'] ?? '');
+        if ($cacheKey !== '' && isset($this->spaceTypeCache[$cacheKey])) {
+            return $this->spaceTypeCache[$cacheKey];
+        }
+
         $spaceType = strtolower((string) ($system['space_type'] ?? $system['space'] ?? $system['region_type'] ?? ''));
+        $spaceType = str_replace([' ', '-', '_'], '', $spaceType);
         if ($spaceType !== '') {
-            if ($spaceType === 'wormhole') {
-                return 'wh';
+            if ($spaceType === 'wormhole' || $spaceType === 'wh') {
+                return $this->rememberSpaceType($cacheKey, 'wh');
             }
-            if (in_array($spaceType, ['highsec', 'lowsec', 'nullsec', 'pochven', 'wh'], true)) {
-                return $spaceType;
+            if (in_array($spaceType, ['highsec', 'lowsec', 'nullsec', 'pochven'], true)) {
+                return $this->rememberSpaceType($cacheKey, $spaceType);
             }
         }
 
         if (!empty($system['is_pochven'])) {
-            return 'pochven';
+            return $this->rememberSpaceType($cacheKey, 'pochven');
         }
 
         if (!empty($system['is_wormhole']) || !empty($system['is_wh'])) {
-            return 'wh';
+            return $this->rememberSpaceType($cacheKey, 'wh');
         }
 
         $security = (float) ($system['security'] ?? 0.0);
         if ($security >= self::HIGH_SEC_MIN) {
-            return 'highsec';
+            return $this->rememberSpaceType($cacheKey, 'highsec');
         }
         if ($security >= self::LOW_SEC_MIN) {
-            return 'lowsec';
+            return $this->rememberSpaceType($cacheKey, 'lowsec');
         }
 
-        return 'nullsec';
+        return $this->rememberSpaceType($cacheKey, 'nullsec');
+    }
+
+    private function rememberSpaceType(string $cacheKey, string $spaceType): string
+    {
+        if ($cacheKey !== '') {
+            $this->spaceTypeCache[$cacheKey] = $spaceType;
+        }
+
+        return $spaceType;
     }
 
     public function isSystemAllowed(array $system, array $options): bool
