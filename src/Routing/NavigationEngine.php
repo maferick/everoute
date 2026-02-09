@@ -227,10 +227,15 @@ final class NavigationEngine
                     return INF;
                 }
                 if ($useSubcapPolicy) {
-                    return $this->gateStepCost($preference, $system) + $this->avoidPenalty($system, $options);
+                    return $this->gateStepCost($preference, $system)
+                        + $this->npcStationBonus($system, $options)
+                        + $this->avoidPenalty($system, $options);
                 }
                 $riskScore = $this->riskScore($to);
-                return 1.0 + ($riskScore * $this->riskWeightCache) + $this->avoidPenalty($system, $options);
+                return 1.0
+                    + ($riskScore * $this->riskWeightCache)
+                    + $this->npcStationBonus($system, $options)
+                    + $this->avoidPenalty($system, $options);
             },
             null,
             $useSubcapPolicy ? $policy['allowed'] : null,
@@ -530,11 +535,15 @@ final class NavigationEngine
                         + $fatigue
                         + $cooldown
                         + ($riskScore * $this->riskWeightCache)
+                        + $this->npcStationBonus($system, $options)
                         + $this->avoidPenalty($system, $options);
                 }
 
                 $riskScore = $this->riskScore($to);
-                return 1.0 + ($riskScore * $this->riskWeightCache) + $this->avoidPenalty($system, $options);
+                return 1.0
+                    + ($riskScore * $this->riskWeightCache)
+                    + $this->npcStationBonus($system, $options)
+                    + $this->avoidPenalty($system, $options);
             },
             null,
             null,
@@ -742,6 +751,24 @@ final class NavigationEngine
     {
         $penalty = (1.0 - $security) * 100.0;
         return max(0.0, min(100.0, $penalty));
+    }
+
+    private function npcStationBonus(array $system, array $options): float
+    {
+        if (empty($options['prefer_npc'])) {
+            return 0.0;
+        }
+
+        $npcCount = (int) ($system['npc_station_count'] ?? 0);
+        $hasNpcStation = !empty($system['has_npc_station']) || $npcCount > 0;
+
+        if (!$hasNpcStation) {
+            return 0.0;
+        }
+
+        $count = max(1, $npcCount);
+        $bonusMagnitude = min(0.5, 0.1 * $count);
+        return -$bonusMagnitude;
     }
 
     /** @param array<int, array{id: int, security: float}> $systems */
