@@ -20,6 +20,10 @@ final class NavigationEngine
     private array $risk = [];
     /** @var array<int, int[]> */
     private array $gateNeighbors = [];
+    /** @var array<int, array<int, array{to: int, is_regional_gate: bool}>> */
+    private array $adjacency = [];
+    /** @var array<int, array<int, array{to: int, is_regional_gate: bool}>> */
+    private array $reverseAdjacency = [];
     private RiskScorer $riskScorer;
 
     public function __construct(
@@ -500,80 +504,154 @@ final class NavigationEngine
             ];
         }
 
-        $gateGraph = $this->buildGateGraph($startId, $endId, $shipType, $options);
-        $jumpGraph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, false);
-        $graph = $this->mergeGraphs($gateGraph['neighbors'], $jumpGraph['neighbors']);
-        $filtered = $gateGraph['filtered'] + $jumpGraph['filtered'];
+        $launchHopLimit = max(1, min(10, (int) ($options['hybrid_launch_hops'] ?? 6)));
+        $landingHopLimit = max(0, min(10, (int) ($options['hybrid_landing_hops'] ?? 4)));
 
-        if (!isset($graph[$startId]) || !isset($graph[$endId])) {
+        $launchCandidates = $this->buildHybridLaunchCandidates(
+            $startId,
+            $endId,
+            $shipType,
+            $options,
+            $launchHopLimit,
+            50
+        );
+        if ($launchCandidates === []) {
             return [
                 'feasible' => false,
-                'reason' => 'Start or destination not allowed for hybrid route.',
+                'reason' => 'No launch candidates within gate hop limit.',
                 'nodes_explored' => 0,
-                'illegal_systems_filtered' => $filtered,
+                'illegal_systems_filtered' => 0,
             ];
         }
 
-        $dijkstra = new Dijkstra();
-        $this->riskWeightCache = $this->riskWeight($options);
-        $result = $dijkstra->shortestPath(
-            $graph,
-            $startId,
+        $landingCandidates = $this->buildHybridLandingCandidates(
             $endId,
-            function (int $from, int $to, mixed $edgeData) use ($options): float {
-                $system = $this->systems[$to] ?? null;
-                if ($system === null) {
-                    return INF;
-                }
-                $edgeType = $edgeData['type'] ?? 'gate';
-                if ($edgeType === 'jump') {
-                    $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
-                    $fatigue = 5.0 + ($distance * 6.0);
-                    $cooldown = max(1.0, $distance * 1.0);
-                    $riskScore = $this->riskScore($to);
-                    return $distance
-                        + $fatigue
-                        + $cooldown
-                        + ($riskScore * $this->riskWeightCache)
-                        + $this->npcStationBonus($system, $options)
-                        + $this->avoidPenalty($system, $options);
-                }
-
-                $riskScore = $this->riskScore($to);
-                return 1.0
-                    + ($riskScore * $this->riskWeightCache)
-                    + $this->npcStationBonus($system, $options)
-                    + $this->avoidPenalty($system, $options);
-            },
-            null,
-            null,
-            80000
+            $shipType,
+            $options,
+            $landingHopLimit
         );
+        if ($landingCandidates === []) {
+            return [
+                'feasible' => false,
+                'reason' => 'No landing candidates within gate hop limit.',
+                'nodes_explored' => 0,
+                'illegal_systems_filtered' => 0,
+            ];
+        }
 
-        if ($result['path'] === [] || ($result['path'][count($result['path']) - 1] ?? null) !== $endId) {
+        $jumpNeighbors = $this->buildHybridJumpNeighbors($neighbors);
+        $this->riskWeightCache = $this->riskWeight($options);
+        $dijkstra = new Dijkstra();
+        $bestPlan = null;
+        $bestCost = INF;
+        $nodesExplored = 0;
+
+        foreach ($launchCandidates as $launch) {
+            $launchId = $launch['system_id'];
+            $launchSystem = $this->systems[$launchId] ?? null;
+            if ($launchSystem === null
+                || !$this->isSystemAllowedForJumpChain($shipType, $launchSystem, false, $options)
+            ) {
+                continue;
+            }
+            if (!isset($jumpNeighbors[$launchId])) {
+                $jumpNeighbors[$launchId] = [];
+            }
+
+            foreach ($landingCandidates as $landing) {
+                $landingId = $landing['system_id'];
+                $landingSystem = $this->systems[$landingId] ?? null;
+                if ($landingSystem === null
+                    || !$this->isSystemAllowedForJumpChain($shipType, $landingSystem, false, $options)
+                ) {
+                    continue;
+                }
+                if (!isset($jumpNeighbors[$landingId])) {
+                    $jumpNeighbors[$landingId] = [];
+                }
+
+                $result = $dijkstra->shortestPath(
+                    $jumpNeighbors,
+                    $launchId,
+                    $landingId,
+                    function (int $from, int $to, mixed $edgeData) use ($options): float {
+                        $system = $this->systems[$to] ?? null;
+                        if ($system === null) {
+                            return INF;
+                        }
+                        $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
+                        $fatigue = 5.0 + ($distance * 6.0);
+                        $cooldown = max(1.0, $distance * 1.0);
+                        $riskScore = $this->riskScore($to);
+                        return $distance
+                            + $fatigue
+                            + $cooldown
+                            + ($riskScore * $this->riskWeightCache)
+                            + $this->npcStationBonus($system, $options)
+                            + $this->avoidPenalty($system, $options);
+                    },
+                    function (int $node) use ($shipType, $options): bool {
+                        $system = $this->systems[$node] ?? null;
+                        if ($system === null) {
+                            return false;
+                        }
+                        return $this->isSystemAllowedForJumpChain($shipType, $system, true, $options);
+                    },
+                    null,
+                    60000
+                );
+                $nodesExplored += $result['nodes_explored'] ?? 0;
+
+                if ($result['path'] === [] || ($result['path'][count($result['path']) - 1] ?? null) !== $landingId) {
+                    continue;
+                }
+
+                $jumpSegments = $this->buildSegments($result['path'], $result['edges'], $shipType);
+                if (!$this->validateRoute($jumpSegments, $shipType, $effectiveRange)) {
+                    continue;
+                }
+
+                $launchSegments = $this->buildGateSegmentsFromPath($launch['gate_path']);
+                $landingSegments = $this->buildGateSegmentsFromPath($landing['gate_path']);
+                $segments = array_merge($launchSegments, $jumpSegments, $landingSegments);
+
+                $totalGateHops = $launch['gate_hops'] + $landing['gate_hops'];
+                $totalCost = round($result['distance'] + $totalGateHops, 2);
+                if ($totalCost >= $bestCost) {
+                    continue;
+                }
+
+                $summary = $this->summarizeRoute($segments, $totalCost);
+                $summary['nodes_explored'] = $nodesExplored;
+                $summary['illegal_systems_filtered'] = 0;
+                $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($jumpSegments));
+                $summary['launch_system'] = $this->systemSummary($launchId);
+                $summary['landing_system'] = $this->systemSummary($landingId);
+                $summary['launch_gate_hops'] = $launch['gate_hops'];
+                $summary['landing_gate_hops'] = $landing['gate_hops'];
+                $summary['jump_hops'] = count($jumpSegments);
+                $summary['jump_chain_ly'] = round((float) $summary['total_jump_ly'], 2);
+                $summary['launch_choice'] = $launch['choice_details'];
+                $summary['launch_reason'] = $launch['reason'];
+                $summary['landing_choice'] = [
+                    'gate_hops' => $landing['gate_hops'],
+                ];
+
+                $bestPlan = $summary;
+                $bestCost = $totalCost;
+            }
+        }
+
+        if ($bestPlan === null) {
             return [
                 'feasible' => false,
                 'reason' => 'No hybrid route found.',
-                'nodes_explored' => $result['nodes_explored'],
-                'illegal_systems_filtered' => $filtered,
+                'nodes_explored' => $nodesExplored,
+                'illegal_systems_filtered' => 0,
             ];
         }
 
-        $segments = $this->buildSegments($result['path'], $result['edges'], $shipType);
-        if (!$this->validateRoute($segments, $shipType, $effectiveRange)) {
-            return [
-                'feasible' => false,
-                'reason' => 'Hybrid route failed validation.',
-                'nodes_explored' => $result['nodes_explored'],
-                'illegal_systems_filtered' => $filtered,
-            ];
-        }
-
-        $summary = $this->summarizeRoute($segments, $result['distance']);
-        $summary['nodes_explored'] = $result['nodes_explored'];
-        $summary['illegal_systems_filtered'] = $filtered;
-        $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($segments));
-        return $summary;
+        return $bestPlan;
     }
 
     /** @return array{neighbors: array<int, array<int, array<string, mixed>>>, filtered: int} */
@@ -1359,6 +1437,34 @@ final class NavigationEngine
         return $neighbors;
     }
 
+    /**
+     * @param array<int, int[]> $precomputed
+     * @return array<int, array<int, array<string, mixed>>>
+     */
+    private function buildHybridJumpNeighbors(array $precomputed): array
+    {
+        $neighbors = [];
+        foreach ($precomputed as $from => $toList) {
+            if (!isset($this->systems[$from])) {
+                continue;
+            }
+            foreach ($toList as $to) {
+                if (!isset($this->systems[$to])) {
+                    continue;
+                }
+                $neighbors[$from][] = [
+                    'to' => $to,
+                    'type' => 'jump',
+                    'distance_ly' => JumpMath::distanceLy($this->systems[$from], $this->systems[$to]),
+                ];
+            }
+            if (!isset($neighbors[$from])) {
+                $neighbors[$from] = [];
+            }
+        }
+        return $neighbors;
+    }
+
     private function riskScore(int $systemId): float
     {
         $risk = $this->risk[$systemId] ?? [];
@@ -1369,6 +1475,54 @@ final class NavigationEngine
     {
         $safety = max(0, min(100, (int) ($options['safety_vs_speed'] ?? 50)));
         return 0.2 + ($safety / 100) * 0.8;
+    }
+
+    private function isCapitalShipType(string $shipType): bool
+    {
+        $normalized = $this->shipRules->normalizeShipType($shipType);
+        return in_array($normalized, JumpShipType::CAPITALS, true);
+    }
+
+    private function systemSecurityForNav(array $system, bool $useNav): float
+    {
+        if ($useNav && array_key_exists('security_nav', $system)) {
+            return (float) $system['security_nav'];
+        }
+        return (float) ($system['security'] ?? 0.0);
+    }
+
+    private function isSystemAllowedForJumpChain(string $shipType, array $system, bool $isMidpoint, array $options): bool
+    {
+        $useNavSecurity = $this->isCapitalShipType($shipType);
+        $security = $this->systemSecurityForNav($system, $useNavSecurity);
+
+        if ($useNavSecurity) {
+            if ($security >= 0.5) {
+                return false;
+            }
+        } else {
+            if (!$this->shipRules->isSystemAllowed($shipType, $system, $isMidpoint)) {
+                return false;
+            }
+        }
+
+        if ($isMidpoint) {
+            if ($this->shouldFilterAvoidedSpace($options)) {
+                if (!empty($options['avoid_nullsec']) && $security < 0.1) {
+                    return false;
+                }
+                if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
+                    return false;
+                }
+            }
+            if (!empty($options['avoid_systems'])
+                && in_array($system['name'], (array) $options['avoid_systems'], true)
+            ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** @param array<int, mixed> $edges */
@@ -1389,6 +1543,233 @@ final class NavigationEngine
             ];
         }
         return $segments;
+    }
+
+    /** @param int[] $path */
+    private function buildGateSegmentsFromPath(array $path): array
+    {
+        if (count($path) < 2) {
+            return [];
+        }
+        $edges = [];
+        for ($i = 0; $i < count($path) - 1; $i++) {
+            $edges[] = ['type' => 'gate'];
+        }
+        return $this->buildSegments($path, $edges, '');
+    }
+
+    /**
+     * @return array<int, array{
+     *   system_id: int,
+     *   gate_hops: int,
+     *   gate_path: int[],
+     *   score: float,
+     *   distance_ly: float,
+     *   risk_score: float,
+     *   regional_gate_count: int,
+     *   npc_bonus: float,
+     *   reason: string,
+     *   choice_details: array<string, mixed>
+     * }>
+     */
+    private function buildHybridLaunchCandidates(
+        int $startId,
+        int $endId,
+        string $shipType,
+        array $options,
+        int $maxHops,
+        int $limit
+    ): array {
+        $startSystem = $this->systems[$startId] ?? null;
+        $endSystem = $this->systems[$endId] ?? null;
+        if ($startSystem === null || $endSystem === null) {
+            return [];
+        }
+
+        $paths = $this->gatePathsWithinHops(
+            $startId,
+            $maxHops,
+            function (int $systemId, bool $asMidpoint) use ($shipType, $options): bool {
+                $system = $this->systems[$systemId] ?? null;
+                if ($system === null) {
+                    return false;
+                }
+                return $this->isSystemAllowedForRoute($shipType, $system, $asMidpoint, $options);
+            },
+            $this->adjacency
+        );
+
+        $candidates = [];
+        $riskWeight = $this->riskWeight($options);
+        foreach ($paths['hops'] as $systemId => $hops) {
+            if (!isset($this->systems[$systemId])) {
+                continue;
+            }
+            $system = $this->systems[$systemId];
+            if (!$this->isSystemAllowedForRoute($shipType, $system, false, $options)) {
+                continue;
+            }
+            $distance = JumpMath::distanceLy($system, $endSystem);
+            $riskScore = $this->riskScore($systemId);
+            $regionalGateCount = 0;
+            foreach ($this->adjacency[$systemId] ?? [] as $edge) {
+                if (!empty($edge['is_regional_gate'])) {
+                    $regionalGateCount++;
+                }
+            }
+            $npcBonus = $this->npcStationBonus($system, $options);
+            $score = $distance
+                + ($riskScore * $riskWeight)
+                + ($hops * 0.2)
+                - ($regionalGateCount * 0.3)
+                + $npcBonus;
+            $gatePath = $this->buildGatePathFromPrev($paths['prev'], $systemId);
+
+            $reason = sprintf(
+                'Launch candidate scored %.2f (%.1f LY to destination, %d gate hops, %d regional gates, risk %.2f).',
+                $score,
+                $distance,
+                $hops,
+                $regionalGateCount,
+                $riskScore
+            );
+
+            $choiceDetails = [
+                'score' => round($score, 3),
+                'distance_to_destination_ly' => round($distance, 2),
+                'risk_score' => round($riskScore, 2),
+                'regional_gate_count' => $regionalGateCount,
+                'npc_bonus' => round($npcBonus, 2),
+                'gate_hops' => $hops,
+            ];
+
+            $candidates[] = [
+                'system_id' => (int) $systemId,
+                'gate_hops' => (int) $hops,
+                'gate_path' => $gatePath,
+                'score' => $score,
+                'distance_ly' => $distance,
+                'risk_score' => $riskScore,
+                'regional_gate_count' => $regionalGateCount,
+                'npc_bonus' => $npcBonus,
+                'reason' => $reason,
+                'choice_details' => $choiceDetails,
+            ];
+        }
+
+        usort($candidates, function (array $a, array $b): int {
+            return $a['score'] <=> $b['score'];
+        });
+
+        return array_slice($candidates, 0, $limit);
+    }
+
+    /**
+     * @return array<int, array{system_id: int, gate_hops: int, gate_path: int[]}>
+     */
+    private function buildHybridLandingCandidates(
+        int $endId,
+        string $shipType,
+        array $options,
+        int $maxHops
+    ): array {
+        $endSystem = $this->systems[$endId] ?? null;
+        if ($endSystem === null) {
+            return [];
+        }
+
+        $paths = $this->gatePathsWithinHops(
+            $endId,
+            $maxHops,
+            function (int $systemId, bool $asMidpoint) use ($shipType, $options): bool {
+                $system = $this->systems[$systemId] ?? null;
+                if ($system === null) {
+                    return false;
+                }
+                return $this->isSystemAllowedForRoute($shipType, $system, $asMidpoint, $options);
+            },
+            $this->reverseAdjacency
+        );
+
+        $candidates = [];
+        foreach ($paths['hops'] as $systemId => $hops) {
+            if (!isset($this->systems[$systemId])) {
+                continue;
+            }
+            $system = $this->systems[$systemId];
+            if (!$this->isSystemAllowedForRoute($shipType, $system, false, $options)) {
+                continue;
+            }
+            $gatePath = $this->buildGatePathFromPrev($paths['prev'], $systemId);
+            if ($gatePath !== [] && $gatePath[0] === $endId) {
+                $gatePath = array_reverse($gatePath);
+            }
+            $candidates[] = [
+                'system_id' => (int) $systemId,
+                'gate_hops' => (int) $hops,
+                'gate_path' => $gatePath,
+            ];
+        }
+
+        usort($candidates, function (array $a, array $b): int {
+            return $a['gate_hops'] <=> $b['gate_hops'];
+        });
+
+        return $candidates;
+    }
+
+    /**
+     * @param array<int, array<int, array{to: int, is_regional_gate: bool}>> $graph
+     * @return array{hops: array<int, int>, prev: array<int, int|null>}
+     */
+    private function gatePathsWithinHops(int $startId, int $maxHops, callable $allowFn, array $graph): array
+    {
+        $queue = new \SplQueue();
+        $queue->enqueue($startId);
+        $hops = [$startId => 0];
+        $prev = [$startId => null];
+
+        while (!$queue->isEmpty()) {
+            $current = $queue->dequeue();
+            $currentHops = $hops[$current] ?? 0;
+            if ($currentHops >= $maxHops) {
+                continue;
+            }
+            foreach ($graph[$current] ?? [] as $edge) {
+                $neighbor = (int) ($edge['to'] ?? 0);
+                if ($neighbor === 0 || isset($hops[$neighbor])) {
+                    continue;
+                }
+                if (!$allowFn($neighbor, false)) {
+                    continue;
+                }
+                $hops[$neighbor] = $currentHops + 1;
+                $prev[$neighbor] = $current;
+                if ($allowFn($neighbor, true)) {
+                    $queue->enqueue($neighbor);
+                }
+            }
+        }
+
+        return ['hops' => $hops, 'prev' => $prev];
+    }
+
+    /**
+     * @param array<int, int|null> $prev
+     * @return int[]
+     */
+    private function buildGatePathFromPrev(array $prev, int $targetId): array
+    {
+        if (!isset($prev[$targetId])) {
+            return [];
+        }
+        $path = [$targetId];
+        $current = $targetId;
+        while (isset($prev[$current]) && $prev[$current] !== null) {
+            $current = $prev[$current];
+            $path[] = $current;
+        }
+        return array_reverse($path);
     }
 
     private function validateRoute(array $segments, string $shipType, ?float $effectiveRange): bool
@@ -1547,6 +1928,8 @@ final class NavigationEngine
         GraphStore::load($this->systemsRepo, $this->stargatesRepo, $this->logger);
         $this->systems = GraphStore::systems();
         $this->gateNeighbors = GraphStore::gateNeighbors();
+        $this->adjacency = GraphStore::adjacency();
+        $this->reverseAdjacency = GraphStore::reverseAdjacency();
 
         $riskRows = $this->riskRepo->getHeatmap();
         $this->risk = [];
