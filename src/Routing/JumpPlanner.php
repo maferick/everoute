@@ -408,7 +408,8 @@ final class JumpPlanner
             $riskScore = $riskScorer->penalty($risk[$to] ?? []);
             $npcBonus = $this->npcBonus($systems[$to], $npcStationIds, $options);
             $avoidPenalty = $this->avoidPenalty($systems[$to], $options);
-            return $tentative + ($riskScore * 0.05) - $npcBonus + $avoidPenalty;
+            $cost = $tentative + ($riskScore * 0.05) - $npcBonus + $avoidPenalty;
+            return max(0.1, $cost);
         };
 
         $maxNodes = Env::int('JUMP_MAX_NODES', 2000);
@@ -438,11 +439,14 @@ final class JumpPlanner
         $preferNpc = !empty($options['prefer_npc']);
         $isNpcStation = isset($npcStationIds[$system['id'] ?? -1]);
 
-        if ($preferNpc && ($hasNpc || $isNpcStation)) {
-            return 0.5;
+        if (!$preferNpc || (!$hasNpc && !$isNpcStation)) {
+            return 0.0;
         }
 
-        return ($hasNpc || $isNpcStation) ? 0.2 : 0.0;
+        $shipType = (string) ($options['jump_ship_type'] ?? '');
+        $isCapital = in_array($shipType, JumpShipType::CAPITALS, true);
+
+        return $isCapital ? 1.0 : 0.6;
     }
 
     private function avoidPenalty(array $system, array $options): float
