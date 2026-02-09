@@ -51,6 +51,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
             $output->writeln('<error>Missing range column on jump_neighbors. Expected range_ly or range.</error>');
             return Command::FAILURE;
         }
+        $this->ensureEncodingVersionColumn($pdo, $output);
         $rangeBucketColumn = $this->resolveRangeBucketColumn($pdo);
         $checkpointRepo = new PrecomputeCheckpointRepository($connection);
         $rangeCalculator = new JumpRangeCalculator(__DIR__ . '/../../config/ships.php', __DIR__ . '/../../config/jump_ranges.php');
@@ -420,6 +421,16 @@ final class PrecomputeJumpNeighborsCommand extends Command
         $this->ensureIndex($pdo, 'jump_neighbors', 'idx_jump_neighbors_range', 'range_ly');
 
         return $this->resolveRangeColumn($pdo);
+    }
+
+    private function ensureEncodingVersionColumn(\PDO $pdo, OutputInterface $output): void
+    {
+        if ($this->columnExists($pdo, 'jump_neighbors', 'encoding_version')) {
+            return;
+        }
+
+        $output->writeln('<comment>Missing encoding_version column on jump_neighbors. Attempting to add it...</comment>');
+        $pdo->exec('ALTER TABLE jump_neighbors ADD COLUMN encoding_version TINYINT NOT NULL DEFAULT 1 AFTER neighbor_ids_blob');
     }
 
     private function columnExists(\PDO $pdo, string $table, string $column): bool
