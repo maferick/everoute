@@ -747,7 +747,7 @@ final class NavigationEngine
     {
         $isHighsec = $security >= 0.5;
         $isLowsec = $security >= 0.1 && $security < 0.5;
-        $isNullsec = $security <= 0.0;
+        $isNullsec = $security < 0.1;
 
         if ($avoidLowsec && $avoidNullsec) {
             return $isHighsec;
