@@ -102,6 +102,7 @@ final class NavigationEngine
 
     private function computeGateRoute(int $startId, int $endId, string $shipType, array $options): array
     {
+        $preference = $this->normalizeGatePreference($options);
         if ($startId === $endId) {
             return [
                 'feasible' => true,
@@ -116,30 +117,80 @@ final class NavigationEngine
                 ]],
                 'nodes_explored' => 0,
                 'illegal_systems_filtered' => 0,
+                'preference' => $preference,
+                'penalty' => 0.0,
+                'avoid_flags' => $this->buildAvoidFlags($options),
+                'exception_corridor' => [
+                    'start' => ['required' => false, 'hops' => 0],
+                    'destination' => ['required' => false, 'hops' => 0],
+                ],
             ];
         }
-        $graph = $this->buildGateGraph($startId, $endId, $shipType, $options);
-        if (!isset($graph['neighbors'][$startId]) || !isset($graph['neighbors'][$endId])) {
+        $useSubcapPolicy = ($options['mode'] ?? 'subcap') === 'subcap';
+        $policy = [
+            'allowed' => null,
+            'filtered' => 0,
+            'exception' => [
+                'start' => ['required' => false, 'hops' => 0],
+                'destination' => ['required' => false, 'hops' => 0],
+            ],
+            'reason' => null,
+        ];
+        $neighbors = [];
+        if ($useSubcapPolicy) {
+            $policy = $this->buildSubcapGatePolicy($startId, $endId, $options);
+            if ($policy['reason'] !== null) {
+                return [
+                    'feasible' => false,
+                    'reason' => $policy['reason'],
+                    'nodes_explored' => 0,
+                    'illegal_systems_filtered' => $policy['filtered'],
+                    'preference' => $preference,
+                    'penalty' => 0.0,
+                    'avoid_flags' => $this->buildAvoidFlags($options),
+                    'exception_corridor' => $policy['exception'],
+                ];
+            }
+            $neighbors = $this->buildGateNeighbors();
+        } else {
+            $graph = $this->buildGateGraph($startId, $endId, $shipType, $options);
+            $neighbors = $graph['neighbors'];
+            $policy['filtered'] = $graph['filtered'];
+        }
+        if (!isset($neighbors[$startId]) || !isset($neighbors[$endId])) {
             return [
                 'feasible' => false,
                 'reason' => 'Start or destination not allowed for gate travel.',
                 'nodes_explored' => 0,
-                'illegal_systems_filtered' => $graph['filtered'],
+                'illegal_systems_filtered' => $policy['filtered'],
+                'preference' => $preference,
+                'penalty' => 0.0,
+                'avoid_flags' => $this->buildAvoidFlags($options),
+                'exception_corridor' => $policy['exception'],
             ];
         }
 
         $dijkstra = new Dijkstra();
-        $this->riskWeightCache = $this->riskWeight($options);
+        if (!$useSubcapPolicy) {
+            $this->riskWeightCache = $this->riskWeight($options);
+        }
         $result = $dijkstra->shortestPath(
-            $graph['neighbors'],
+            $neighbors,
             $startId,
             $endId,
-            function (int $from, int $to): float {
+            function (int $from, int $to) use ($useSubcapPolicy, $preference): float {
+                $system = $this->systems[$to] ?? null;
+                if ($system === null) {
+                    return INF;
+                }
+                if ($useSubcapPolicy) {
+                    return $this->gateStepCost($preference, $system);
+                }
                 $riskScore = $this->riskScore($to);
                 return 1.0 + ($riskScore * $this->riskWeightCache);
             },
             null,
-            null,
+            $useSubcapPolicy ? $policy['allowed'] : null,
             50000
         );
 
@@ -148,7 +199,11 @@ final class NavigationEngine
                 'feasible' => false,
                 'reason' => 'No gate route found.',
                 'nodes_explored' => $result['nodes_explored'],
-                'illegal_systems_filtered' => $graph['filtered'],
+                'illegal_systems_filtered' => $policy['filtered'],
+                'preference' => $preference,
+                'penalty' => 0.0,
+                'avoid_flags' => $this->buildAvoidFlags($options),
+                'exception_corridor' => $policy['exception'],
             ];
         }
 
@@ -158,13 +213,21 @@ final class NavigationEngine
                 'feasible' => false,
                 'reason' => 'Gate route failed validation.',
                 'nodes_explored' => $result['nodes_explored'],
-                'illegal_systems_filtered' => $graph['filtered'],
+                'illegal_systems_filtered' => $policy['filtered'],
+                'preference' => $preference,
+                'penalty' => 0.0,
+                'avoid_flags' => $this->buildAvoidFlags($options),
+                'exception_corridor' => $policy['exception'],
             ];
         }
 
         $summary = $this->summarizeRoute($segments, $result['distance']);
         $summary['nodes_explored'] = $result['nodes_explored'];
-        $summary['illegal_systems_filtered'] = $graph['filtered'];
+        $summary['illegal_systems_filtered'] = $policy['filtered'];
+        $summary['preference'] = $preference;
+        $summary['penalty'] = $this->routeSecurityPenalty($summary['systems'] ?? []);
+        $summary['avoid_flags'] = $this->buildAvoidFlags($options);
+        $summary['exception_corridor'] = $policy['exception'];
         return $summary;
     }
 
@@ -504,6 +567,253 @@ final class NavigationEngine
             }
         }
         return true;
+    }
+
+    private function normalizeGatePreference(array $options): string
+    {
+        $preference = strtolower((string) ($options['preference'] ?? 'shorter'));
+        return in_array($preference, ['shorter', 'safer', 'less_secure'], true) ? $preference : 'shorter';
+    }
+
+    private function gateStepCost(string $preference, array $system): float
+    {
+        if ($preference === 'shorter') {
+            return 1.0;
+        }
+        $security = (float) ($system['security'] ?? 0.0);
+        $penalty = exp(0.15 * $this->securityPenalty($security));
+
+        if ($preference === 'safer') {
+            if ($security <= 0.0) {
+                return 2.0 * $penalty;
+            }
+            if ($security < 0.45) {
+                return $penalty;
+            }
+            return 0.90;
+        }
+
+        if ($security <= 0.0) {
+            return 2.0 * $penalty;
+        }
+        if ($security < 0.45) {
+            return 0.90;
+        }
+        return $penalty;
+    }
+
+    private function securityPenalty(float $security): float
+    {
+        $penalty = (1.0 - $security) * 100.0;
+        return max(0.0, min(100.0, $penalty));
+    }
+
+    /** @param array<int, array{id: int, security: float}> $systems */
+    private function routeSecurityPenalty(array $systems): float
+    {
+        if ($systems === []) {
+            return 0.0;
+        }
+        $total = 0.0;
+        $count = 0;
+        foreach ($systems as $system) {
+            $security = (float) ($system['security'] ?? 0.0);
+            $total += $this->securityPenalty($security);
+            $count++;
+        }
+        return $count > 0 ? round($total / $count, 2) : 0.0;
+    }
+
+    private function buildAvoidFlags(array $options): array
+    {
+        return [
+            'avoid_lowsec' => !empty($options['avoid_lowsec']),
+            'avoid_nullsec' => !empty($options['avoid_nullsec']),
+        ];
+    }
+
+    /** @return array{allowed: ?array<int, bool>, filtered: int, exception: array<string, array<string, int|bool>>, reason: ?string} */
+    private function buildSubcapGatePolicy(int $startId, int $endId, array $options): array
+    {
+        $avoidFlags = $this->buildAvoidFlags($options);
+        $avoidNames = array_fill_keys((array) ($options['avoid_systems'] ?? []), true);
+        $blocked = [];
+        $allowedCore = [];
+
+        foreach ($this->systems as $id => $system) {
+            $name = (string) ($system['name'] ?? '');
+            if (isset($avoidNames[$name]) && $id !== $startId && $id !== $endId) {
+                $blocked[$id] = true;
+                continue;
+            }
+            $security = (float) ($system['security'] ?? 0.0);
+            if ($this->isInAllowedCore($security, $avoidFlags['avoid_lowsec'], $avoidFlags['avoid_nullsec'])) {
+                $allowedCore[$id] = true;
+            }
+        }
+
+        if ($allowedCore === []) {
+            return [
+                'allowed' => null,
+                'filtered' => count($this->systems),
+                'exception' => [
+                    'start' => ['required' => false, 'hops' => 0],
+                    'destination' => ['required' => false, 'hops' => 0],
+                ],
+                'reason' => 'No allowed core systems available for gate travel.',
+            ];
+        }
+
+        $exceptionStart = [];
+        $exceptionEnd = [];
+        $exceptionStartHops = 0;
+        $exceptionEndHops = 0;
+
+        if (!isset($allowedCore[$startId])) {
+            $corridor = $this->findShortestGateCorridor($startId, $allowedCore, $blocked);
+            if (!$corridor['found']) {
+                return [
+                    'allowed' => null,
+                    'filtered' => count($this->systems),
+                    'exception' => [
+                        'start' => ['required' => true, 'hops' => 0],
+                        'destination' => ['required' => false, 'hops' => 0],
+                    ],
+                    'reason' => 'No allowed core reachable from start.',
+                ];
+            }
+            $exceptionStart = $corridor['nodes'];
+            $exceptionStartHops = $corridor['hops'];
+        }
+
+        if (!isset($allowedCore[$endId])) {
+            $corridor = $this->findShortestGateCorridor($endId, $allowedCore, $blocked);
+            if (!$corridor['found']) {
+                return [
+                    'allowed' => null,
+                    'filtered' => count($this->systems),
+                    'exception' => [
+                        'start' => ['required' => !isset($allowedCore[$startId]), 'hops' => $exceptionStartHops],
+                        'destination' => ['required' => true, 'hops' => 0],
+                    ],
+                    'reason' => 'No allowed core reachable from destination.',
+                ];
+            }
+            $exceptionEnd = $corridor['nodes'];
+            $exceptionEndHops = $corridor['hops'];
+        }
+
+        $allowed = $allowedCore;
+        $allowed[$startId] = true;
+        $allowed[$endId] = true;
+        foreach ($exceptionStart as $node => $_value) {
+            $allowed[$node] = true;
+        }
+        foreach ($exceptionEnd as $node => $_value) {
+            $allowed[$node] = true;
+        }
+
+        $filtered = count($this->systems) - count($allowed);
+
+        return [
+            'allowed' => $allowed,
+            'filtered' => max(0, $filtered),
+            'exception' => [
+                'start' => ['required' => !isset($allowedCore[$startId]), 'hops' => $exceptionStartHops],
+                'destination' => ['required' => !isset($allowedCore[$endId]), 'hops' => $exceptionEndHops],
+            ],
+            'reason' => null,
+        ];
+    }
+
+    private function isInAllowedCore(float $security, bool $avoidLowsec, bool $avoidNullsec): bool
+    {
+        $isHighsec = $security >= 0.5;
+        $isLowsec = $security >= 0.1 && $security < 0.5;
+        $isNullsec = $security <= 0.0;
+
+        if ($avoidLowsec && $avoidNullsec) {
+            return $isHighsec;
+        }
+        if ($avoidLowsec && !$avoidNullsec) {
+            return $isHighsec || $isNullsec;
+        }
+        if (!$avoidLowsec && $avoidNullsec) {
+            return $isHighsec || $isLowsec;
+        }
+        return true;
+    }
+
+    /** @return array{found: bool, nodes: array<int, bool>, hops: int} */
+    private function findShortestGateCorridor(int $startId, array $allowedCore, array $blocked): array
+    {
+        if (isset($allowedCore[$startId])) {
+            return ['found' => true, 'nodes' => [$startId => true], 'hops' => 0];
+        }
+
+        $queue = new \SplQueue();
+        $queue->enqueue($startId);
+        $visited = [$startId => true];
+        $prev = [];
+
+        while (!$queue->isEmpty()) {
+            $current = $queue->dequeue();
+            foreach ($this->gateNeighbors[$current] ?? [] as $neighbor) {
+                $neighbor = (int) $neighbor;
+                if (isset($visited[$neighbor])) {
+                    continue;
+                }
+                if (isset($blocked[$neighbor])) {
+                    continue;
+                }
+                if (!isset($this->systems[$neighbor])) {
+                    continue;
+                }
+                $visited[$neighbor] = true;
+                $prev[$neighbor] = $current;
+                if (isset($allowedCore[$neighbor])) {
+                    $pathNodes = [$neighbor => true];
+                    $cursor = $neighbor;
+                    $hops = 0;
+                    while (isset($prev[$cursor])) {
+                        $cursor = $prev[$cursor];
+                        $pathNodes[$cursor] = true;
+                        $hops++;
+                        if ($cursor === $startId) {
+                            break;
+                        }
+                    }
+                    return ['found' => true, 'nodes' => $pathNodes, 'hops' => $hops];
+                }
+                $queue->enqueue($neighbor);
+            }
+        }
+
+        return ['found' => false, 'nodes' => [], 'hops' => 0];
+    }
+
+    /** @return array<int, array<int, array<string, mixed>>> */
+    private function buildGateNeighbors(): array
+    {
+        $neighbors = [];
+        foreach ($this->gateNeighbors as $from => $toList) {
+            if (!isset($this->systems[$from])) {
+                continue;
+            }
+            foreach ($toList as $to) {
+                if (!isset($this->systems[$to])) {
+                    continue;
+                }
+                $neighbors[$from][] = [
+                    'to' => $to,
+                    'type' => 'gate',
+                ];
+            }
+            if (!isset($neighbors[$from])) {
+                $neighbors[$from] = [];
+            }
+        }
+        return $neighbors;
     }
 
     private function riskScore(int $systemId): float
