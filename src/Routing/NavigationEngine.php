@@ -1627,6 +1627,15 @@ final class NavigationEngine
                     $regionalGateCount++;
                 }
             }
+            $regionalGateDistance = $system['regional_gate_distance'] ?? null;
+            $regionalGateScore = 0.0;
+            if (is_int($regionalGateDistance)) {
+                if ($regionalGateDistance === 0) {
+                    $regionalGateScore = 1.0;
+                } elseif ($regionalGateDistance === 1) {
+                    $regionalGateScore = 0.5;
+                }
+            }
             $npcBonus = $this->npcStationBonus($system, $options);
             $estimatedJumpCooldown = $this->estimateJumpCooldownMinutes($shipType, $distance);
             $score = $hops
@@ -1634,15 +1643,17 @@ final class NavigationEngine
                 + $estimatedJumpCooldown
                 + ($riskScore * $riskWeight)
                 - ($regionalGateCount * 0.3)
+                - ($regionalGateScore * 0.4)
                 + $npcBonus;
             $gatePath = $this->buildGatePathFromPrev($paths['prev'], $systemId);
 
             $reason = sprintf(
-                'Launch candidate scored %.2f (%.1f LY to destination, %d gate hops, %d regional gates, risk %.2f).',
+                'Launch candidate scored %.2f (%.1f LY to destination, %d gate hops, %d regional gates, regional gate score %.1f, risk %.2f).',
                 $score,
                 $distance,
                 $hops,
                 $regionalGateCount,
+                $regionalGateScore,
                 $riskScore
             );
 
@@ -1651,6 +1662,7 @@ final class NavigationEngine
                 'distance_to_destination_ly' => round($distance, 2),
                 'risk_score' => round($riskScore, 2),
                 'regional_gate_count' => $regionalGateCount,
+                'regional_gate_score' => round($regionalGateScore, 2),
                 'npc_bonus' => round($npcBonus, 2),
                 'gate_hops' => $hops,
                 'estimated_jump_cooldown_minutes' => round($estimatedJumpCooldown, 2),
