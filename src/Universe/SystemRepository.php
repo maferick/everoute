@@ -36,6 +36,40 @@ final class SystemRepository
         return $stmt->fetchAll();
     }
 
+    /** @return array<int, array<string, mixed>> */
+    public function searchByName(string $query, int $limit = 10): array
+    {
+        $query = trim($query);
+        if ($query === '') {
+            return [];
+        }
+
+        $limit = max(1, min(25, $limit));
+        $selectFields = $this->systemSelectFields();
+        $pdo = $this->connection->pdo();
+        $stmt = $pdo->prepare(
+            "SELECT {$selectFields}
+             FROM systems
+             WHERE name LIKE :prefix OR name LIKE :contains
+             ORDER BY
+                CASE
+                    WHEN name = :exact THEN 0
+                    WHEN name LIKE :prefix THEN 1
+                    ELSE 2
+                END,
+                LENGTH(name) ASC,
+                security_nav DESC
+             LIMIT {$limit}"
+        );
+        $stmt->execute([
+            'exact' => $query,
+            'prefix' => $query . '%',
+            'contains' => '%' . $query . '%',
+        ]);
+
+        return $stmt->fetchAll();
+    }
+
     public function listForRouting(): array
     {
         $selectFields = $this->systemSelectFields();
@@ -54,11 +88,8 @@ final class SystemRepository
 
     private function systemSelectFields(): string
     {
-        if ($this->hasSecurityNavColumn()) {
-            return 'id, name, security_nav AS security, security_raw, security_nav, region_id, constellation_id, has_npc_station, npc_station_count, system_size_au, x, y, z';
-        }
-
-        return 'id, name, security AS security, security_raw, security AS security_nav, region_id, constellation_id, has_npc_station, npc_station_count, system_size_au, x, y, z';
+        $securityExpr = 'ROUND(COALESCE(security_raw, security), 1)';
+        return "id, name, {$securityExpr} AS security, security_raw, {$securityExpr} AS security_nav, region_id, constellation_id, has_npc_station, npc_station_count, system_size_au, x, y, z";
     }
 
     private function hasSecurityNavColumn(): bool

@@ -54,8 +54,8 @@ final class ApiController
         }
 
         $body = $request->body;
-        $from = $this->validator->string($body['from'] ?? null);
-        $to = $this->validator->string($body['to'] ?? null);
+        $from = $this->validator->string($body['from_id'] ?? $body['from'] ?? null);
+        $to = $this->validator->string($body['to_id'] ?? $body['to'] ?? null);
         if ($from === null || $to === null) {
             return new JsonResponse(['error' => 'Invalid from/to'], 422);
         }
@@ -106,6 +106,27 @@ final class ApiController
         }
 
         return new JsonResponse($result);
+    }
+
+    public function systemSearch(Request $request): Response
+    {
+        if (!$this->rateLimiter->allow('systems:' . $request->ip)) {
+            return new JsonResponse(['error' => 'rate_limited'], 429);
+        }
+
+        $query = $this->validator->string($request->query['q'] ?? null) ?? '';
+        $limit = $this->validator->int($request->query['limit'] ?? null, 1, 25, 10);
+        $rows = $this->systems->searchByName($query, $limit);
+
+        $payload = array_map(static fn (array $row) => [
+            'id' => (int) $row['id'],
+            'name' => (string) $row['name'],
+            'sec_nav' => isset($row['security_nav']) ? (float) $row['security_nav'] : (float) $row['security'],
+            'sec_raw' => isset($row['security_raw']) ? (float) $row['security_raw'] : null,
+            'region' => $row['region_id'] ?? null,
+        ], $rows);
+
+        return new JsonResponse($payload);
     }
 
     public function systemRisk(Request $request): Response
