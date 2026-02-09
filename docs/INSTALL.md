@@ -12,7 +12,7 @@ cp .env.example .env
 php bin/console install --admin-user root --admin-pass <password>
 php bin/console sde:install
 php bin/console precompute:system-facts
-php bin/console precompute:jump-neighbors --hours=1
+php bin/console jump:precompute --hours=1
 php bin/console seed:chokepoints
 php bin/console import:risk --file data/risk.json
 ```

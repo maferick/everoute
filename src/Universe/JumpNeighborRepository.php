@@ -14,7 +14,7 @@ final class JumpNeighborRepository
     {
     }
 
-    /** @return array<int, array<int, float>>|null */
+    /** @return array<int, int[]>|null */
     public function loadRangeBucket(int $rangeBucket, int $expectedSystems): ?array
     {
         $pdo = $this->connection->pdo();
@@ -27,17 +27,14 @@ final class JumpNeighborRepository
         $neighbors = [];
         while ($row = $stmt->fetch()) {
             $payload = $row['neighbor_ids_blob'];
-            $decoded = null;
-            if (is_string($payload)) {
+            $decoded = [];
+            if (is_string($payload) && $payload !== '') {
                 $decompressed = @gzuncompress($payload);
-                if ($decompressed !== false) {
-                    $decoded = json_decode($decompressed, true);
-                } else {
-                    $decoded = json_decode($payload, true);
+                $binary = $decompressed !== false ? $decompressed : $payload;
+                $unpacked = @unpack('N*', $binary);
+                if (is_array($unpacked)) {
+                    $decoded = array_values(array_map('intval', $unpacked));
                 }
-            }
-            if (!is_array($decoded)) {
-                $decoded = [];
             }
             $neighbors[(int) $row['system_id']] = $decoded;
         }
@@ -55,18 +52,24 @@ final class JumpNeighborRepository
             return $this->rangeColumn;
         }
 
-        $stmt = $pdo->prepare(
-            'SELECT column_name FROM information_schema.columns
-             WHERE table_schema = DATABASE()
-               AND table_name = :table
-               AND (column_name = :range_ly OR column_name = :range)'
-        );
-        $stmt->execute([
-            'table' => 'jump_neighbors',
-            'range_ly' => 'range_ly',
-            'range' => 'range',
-        ]);
-        $columns = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+        $driver = $pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'sqlite') {
+            $stmt = $pdo->query("PRAGMA table_info('jump_neighbors')");
+            $columns = $stmt->fetchAll(\PDO::FETCH_COLUMN, 1);
+        } else {
+            $stmt = $pdo->prepare(
+                'SELECT column_name FROM information_schema.columns
+                 WHERE table_schema = DATABASE()
+                   AND table_name = :table
+                   AND (column_name = :range_ly OR column_name = :range)'
+            );
+            $stmt->execute([
+                'table' => 'jump_neighbors',
+                'range_ly' => 'range_ly',
+                'range' => 'range',
+            ]);
+            $columns = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+        }
         if (in_array('range_ly', $columns, true)) {
             $this->rangeColumn = 'range_ly';
             return $this->rangeColumn;
