@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Everoute\Sde;
 
 use Everoute\DB\Connection;
+use Everoute\Universe\SecurityStatus;
 use PDO;
 use RuntimeException;
 
@@ -44,7 +45,7 @@ final class SdeImporter
                 $pdo,
                 'systems',
                 'systems_stage',
-                ['id', 'name', 'security', 'region_id', 'constellation_id', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at']
+                ['id', 'name', 'security', 'security_raw', 'security_nav', 'region_id', 'constellation_id', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at']
             );
             $this->insertFromStage(
                 $pdo,
@@ -78,6 +79,8 @@ final class SdeImporter
             id BIGINT PRIMARY KEY,
             name VARCHAR(128) NOT NULL,
             security DECIMAL(4,2) NOT NULL,
+            security_raw DECIMAL(4,2) NOT NULL,
+            security_nav DECIMAL(4,2) NOT NULL,
             region_id BIGINT NULL,
             constellation_id BIGINT NULL,
             has_npc_station TINYINT(1) NOT NULL DEFAULT 0,
@@ -115,6 +118,8 @@ final class SdeImporter
             id BIGINT PRIMARY KEY,
             name VARCHAR(128) NOT NULL UNIQUE,
             security DECIMAL(4,2) NOT NULL,
+            security_raw DECIMAL(4,2) NOT NULL,
+            security_nav DECIMAL(4,2) NOT NULL,
             region_id BIGINT NULL,
             constellation_id BIGINT NULL,
             has_npc_station TINYINT(1) NOT NULL DEFAULT 0,
@@ -168,6 +173,8 @@ final class SdeImporter
         $this->ensureStargateIndex($pdo, 'idx_regional_gate', 'is_regional_gate');
         $this->ensureSystemColumn($pdo, 'has_npc_station', 'TINYINT(1) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'npc_station_count', 'INT NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'security_raw', 'DECIMAL(4,2) NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'security_nav', 'DECIMAL(4,2) NOT NULL DEFAULT 0');
     }
 
     private function ensureStationTypeColumn(PDO $pdo): void
@@ -237,7 +244,7 @@ final class SdeImporter
                 $this->insertBatch(
                     $pdo,
                     'systems_stage',
-                    ['id', 'name', 'security', 'region_id', 'constellation_id', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
+                    ['id', 'name', 'security', 'security_raw', 'security_nav', 'region_id', 'constellation_id', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
                     $batch
                 );
                 $batch = [];
@@ -249,7 +256,7 @@ final class SdeImporter
             $this->insertBatch(
                 $pdo,
                 'systems_stage',
-                ['id', 'name', 'security', 'region_id', 'constellation_id', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
+                ['id', 'name', 'security', 'security_raw', 'security_nav', 'region_id', 'constellation_id', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
                 $batch
             );
         }
@@ -507,7 +514,8 @@ final class SdeImporter
     {
         $id = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['id'] ?? $row['_key'] ?? $row['key'] ?? 0);
         $name = $this->normalizeName($row['solarSystemName'] ?? $row['name'] ?? null, 'Unknown');
-        $security = (float) ($row['security'] ?? $row['securityStatus'] ?? 0.0);
+        $securityRaw = (float) ($row['security'] ?? $row['securityStatus'] ?? 0.0);
+        $securityNav = SecurityStatus::navFromRaw($securityRaw);
         $regionId = $row['regionID'] ?? $row['regionId'] ?? $row['region_id'] ?? null;
         $constellationId = $row['constellationID'] ?? $row['constellationId'] ?? $row['constellation_id'] ?? null;
         $position = is_array($row['position'] ?? null) ? $row['position'] : [];
@@ -526,7 +534,9 @@ final class SdeImporter
         return [
             'id' => $id,
             'name' => $name,
-            'security' => $security,
+            'security' => $securityNav,
+            'security_raw' => $securityRaw,
+            'security_nav' => $securityNav,
             'region_id' => $regionId !== null ? (int) $regionId : null,
             'constellation_id' => $constellationId !== null ? (int) $constellationId : null,
             'has_npc_station' => 0,

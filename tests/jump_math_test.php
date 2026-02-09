@@ -22,12 +22,12 @@ if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
 
 $connection = new Connection('sqlite::memory:', '', '');
 $pdo = $connection->pdo();
-$pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, region_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
+$pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, security_raw REAL, security_nav REAL, region_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
 
 $metersPerLy = JumpMath::METERS_PER_LY;
-$stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-$stmt->execute([1, 'Origin', 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0]);
-$stmt->execute([2, 'ThreeLY', 0.2, 1, 0, 0, 1.0, 3 * $metersPerLy, 0.0, 0.0]);
+$stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+$stmt->execute([1, 'Origin', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0]);
+$stmt->execute([2, 'ThreeLY', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 3 * $metersPerLy, 0.0, 0.0]);
 
 $repo = new SystemRepository($connection);
 $systems = $repo->listForRouting();

@@ -16,10 +16,10 @@ final class SystemRepository
     {
         $pdo = $this->connection->pdo();
         if (ctype_digit($value)) {
-            $stmt = $pdo->prepare('SELECT * FROM systems WHERE id = :id');
+            $stmt = $pdo->prepare('SELECT id, name, security_nav AS security, security_raw, security_nav, region_id, constellation_id, has_npc_station, npc_station_count, system_size_au, x, y, z FROM systems WHERE id = :id');
             $stmt->execute(['id' => (int) $value]);
         } else {
-            $stmt = $pdo->prepare('SELECT * FROM systems WHERE name = :name');
+            $stmt = $pdo->prepare('SELECT id, name, security_nav AS security, security_raw, security_nav, region_id, constellation_id, has_npc_station, npc_station_count, system_size_au, x, y, z FROM systems WHERE name = :name');
             $stmt->execute(['name' => $value]);
         }
         $row = $stmt->fetch();
@@ -28,14 +28,14 @@ final class SystemRepository
 
     public function listAll(): array
     {
-        $stmt = $this->connection->pdo()->query('SELECT id, name, security, region_id, has_npc_station, npc_station_count, system_size_au, x, y, z FROM systems ORDER BY name');
+        $stmt = $this->connection->pdo()->query('SELECT id, name, security_nav AS security, security_raw, security_nav, region_id, has_npc_station, npc_station_count, system_size_au, x, y, z FROM systems ORDER BY name');
         return $stmt->fetchAll();
     }
 
     public function listForRouting(): array
     {
         $stmt = $this->connection->pdo()->query(
-            'SELECT id, name, security, region_id, has_npc_station, npc_station_count, system_size_au, x, y, z FROM systems'
+            'SELECT id, name, security_nav AS security, security_raw, security_nav, region_id, has_npc_station, npc_station_count, system_size_au, x, y, z FROM systems'
         );
         return $stmt->fetchAll();
     }

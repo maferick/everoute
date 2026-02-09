@@ -35,16 +35,16 @@ if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
 
 $connection = new Connection('sqlite::memory:', '', '');
 $pdo = $connection->pdo();
-$pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, region_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
+$pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, security_raw REAL, security_nav REAL, region_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
 
 $metersPerLy = JumpMath::METERS_PER_LY;
 $systemsData = [
-    [1, 'Start', 0.2, 1, 1, 1, 1.0, 0.0, 0.0, 0.0],
-    [2, 'Mid-1', 0.2, 1, 0, 0, 1.0, 8 * $metersPerLy, 0.0, 0.0],
-    [3, 'Mid-2', 0.2, 1, 0, 0, 1.0, 16 * $metersPerLy, 0.0, 0.0],
-    [4, 'End', 0.2, 1, 1, 1, 1.0, 24 * $metersPerLy, 0.0, 0.0],
+    [1, 'Start', 0.2, 0.2, 0.2, 1, 1, 1, 1.0, 0.0, 0.0, 0.0],
+    [2, 'Mid-1', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 8 * $metersPerLy, 0.0, 0.0],
+    [3, 'Mid-2', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 16 * $metersPerLy, 0.0, 0.0],
+    [4, 'End', 0.2, 0.2, 0.2, 1, 1, 1, 1.0, 24 * $metersPerLy, 0.0, 0.0],
 ];
-$stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+$stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
 foreach ($systemsData as $row) {
     $stmt->execute($row);
 }

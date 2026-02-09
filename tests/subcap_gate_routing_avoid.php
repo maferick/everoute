@@ -44,20 +44,20 @@ if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
 
 $connection = new Connection('sqlite::memory:', '', '');
 $pdo = $connection->pdo();
-$pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, region_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
+$pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, security_raw REAL, security_nav REAL, region_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
 $pdo->exec('CREATE TABLE stargates (from_system_id INTEGER, to_system_id INTEGER, is_regional_gate INTEGER)');
 $pdo->exec('CREATE TABLE system_risk (system_id INTEGER, kills_last_1h INTEGER, kills_last_24h INTEGER, pod_kills_last_1h INTEGER, pod_kills_last_24h INTEGER, last_updated_at TEXT)');
 
 $systems = [
-    [1, 'HS-A', 0.6, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [2, 'HS-B', 0.7, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [3, 'HS-C', 0.65, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [4, 'LS-1', 0.3, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [5, 'LS-2', 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [6, 'NS-1', -0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [7, 'NS-2', -0.3, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [1, 'HS-A', 0.6, 0.6, 0.6, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [2, 'HS-B', 0.7, 0.7, 0.7, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [3, 'HS-C', 0.65, 0.65, 0.65, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [4, 'LS-1', 0.3, 0.3, 0.3, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [5, 'LS-2', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [6, 'NS-1', -0.2, -0.2, -0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [7, 'NS-2', -0.3, -0.3, -0.3, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
 ];
-$stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+$stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
 foreach ($systems as $system) {
     $stmt->execute($system);
     $pdo->prepare('INSERT INTO system_risk VALUES (?, 0, 0, 0, 0, ?)')
