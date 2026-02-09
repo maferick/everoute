@@ -118,7 +118,7 @@ final class NavigationEngine
                 'illegal_systems_filtered' => 0,
             ];
         }
-        $graph = $this->buildGateGraph($shipType, $options);
+        $graph = $this->buildGateGraph($startId, $endId, $shipType, $options);
         if (!isset($graph['neighbors'][$startId]) || !isset($graph['neighbors'][$endId])) {
             return [
                 'feasible' => false,
@@ -310,7 +310,7 @@ final class NavigationEngine
             ];
         }
 
-        $gateGraph = $this->buildGateGraph($shipType, $options);
+        $gateGraph = $this->buildGateGraph($startId, $endId, $shipType, $options);
         $jumpGraph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options);
         $graph = $this->mergeGraphs($gateGraph['neighbors'], $jumpGraph['neighbors']);
         $filtered = $gateGraph['filtered'] + $jumpGraph['filtered'];
@@ -375,17 +375,25 @@ final class NavigationEngine
     }
 
     /** @return array{neighbors: array<int, array<int, array<string, mixed>>>, filtered: int} */
-    private function buildGateGraph(string $shipType, array $options): array
+    private function buildGateGraph(int $startId, int $endId, string $shipType, array $options): array
     {
         $neighbors = [];
         $filtered = 0;
         foreach ($this->gateNeighbors as $from => $toList) {
-            if (!$this->isSystemAllowedForRoute($shipType, $this->systems[$from], false, $options)) {
+            if (!isset($this->systems[$from])) {
+                continue;
+            }
+            $fromIsMidpoint = $from !== $startId && $from !== $endId;
+            if (!$this->isSystemAllowedForRoute($shipType, $this->systems[$from], $fromIsMidpoint, $options)) {
                 $filtered++;
                 continue;
             }
             foreach ($toList as $to) {
-                if (!$this->isSystemAllowedForRoute($shipType, $this->systems[$to], false, $options)) {
+                if (!isset($this->systems[$to])) {
+                    continue;
+                }
+                $toIsMidpoint = $to !== $startId && $to !== $endId;
+                if (!$this->isSystemAllowedForRoute($shipType, $this->systems[$to], $toIsMidpoint, $options)) {
                     $filtered++;
                     continue;
                 }
@@ -393,6 +401,14 @@ final class NavigationEngine
                     'to' => $to,
                     'type' => 'gate',
                 ];
+            }
+        }
+        foreach ([$startId, $endId] as $endpointId) {
+            if (isset($this->systems[$endpointId])
+                && $this->isSystemAllowedForRoute($shipType, $this->systems[$endpointId], false, $options)
+                && !isset($neighbors[$endpointId])
+            ) {
+                $neighbors[$endpointId] = [];
             }
         }
 
@@ -408,7 +424,8 @@ final class NavigationEngine
             if (!isset($this->systems[$from])) {
                 continue;
             }
-            if (!$this->isSystemAllowedForRoute($shipType, $this->systems[$from], false, $options)) {
+            $fromIsMidpoint = $from !== $startId && $from !== $endId;
+            if (!$this->isSystemAllowedForRoute($shipType, $this->systems[$from], $fromIsMidpoint, $options)) {
                 $filtered++;
                 continue;
             }
@@ -416,8 +433,8 @@ final class NavigationEngine
                 if (!isset($this->systems[$to])) {
                     continue;
                 }
-                $isEndpoint = $to === $endId;
-                if (!$this->isSystemAllowedForRoute($shipType, $this->systems[$to], !$isEndpoint, $options)) {
+                $toIsMidpoint = $to !== $startId && $to !== $endId;
+                if (!$this->isSystemAllowedForRoute($shipType, $this->systems[$to], $toIsMidpoint, $options)) {
                     $filtered++;
                     continue;
                 }
@@ -426,6 +443,14 @@ final class NavigationEngine
                     'type' => 'jump',
                     'distance_ly' => JumpMath::distanceLy($this->systems[$from], $this->systems[$to]),
                 ];
+            }
+        }
+        foreach ([$startId, $endId] as $endpointId) {
+            if (isset($this->systems[$endpointId])
+                && $this->isSystemAllowedForRoute($shipType, $this->systems[$endpointId], false, $options)
+                && !isset($neighbors[$endpointId])
+            ) {
+                $neighbors[$endpointId] = [];
             }
         }
 
@@ -451,14 +476,16 @@ final class NavigationEngine
             return false;
         }
         $security = (float) ($system['security'] ?? 0.0);
-        if (!empty($options['avoid_nullsec']) && $security < 0.1) {
-            return false;
-        }
-        if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
-            return false;
-        }
-        if (!empty($options['avoid_systems']) && in_array($system['name'], (array) $options['avoid_systems'], true)) {
-            return false;
+        if ($isMidpoint) {
+            if (!empty($options['avoid_nullsec']) && $security < 0.1) {
+                return false;
+            }
+            if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
+                return false;
+            }
+            if (!empty($options['avoid_systems']) && in_array($system['name'], (array) $options['avoid_systems'], true)) {
+                return false;
+            }
         }
         return true;
     }
