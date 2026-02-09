@@ -260,6 +260,10 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                         $fatigue = $route['fatigue'] ?? null;
                         $cooldownTotal = $fatigue['cooldown_total_minutes'] ?? null;
                         $fatigueLabel = $fatigue['fatigue_risk_label'] ?? null;
+                        $cooldowns = $fatigue['cooldowns_minutes'] ?? [];
+                        $fatigueMinutes = $fatigue['fatigue_minutes'] ?? null;
+                        $waitExplanations = $route['wait_explanations'] ?? [];
+                        $waitTotalMinutes = $route['total_wait_minutes'] ?? null;
                         $sameAsGate = $label === 'Hybrid' && $gateKey && $segments && $gateKey === $buildRouteKey($segments);
                         $stepsCount = count($segments);
                         $systems = $route['systems'] ?? [];
@@ -313,6 +317,56 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                                         <span class="kpi-value">TBD</span>
                                     </div>
                                 </div>
+
+                                <?php if ($jumpCount > 0): ?>
+                                    <div class="route-sublist">
+                                        <h4>Cooldowns & fatigue</h4>
+                                        <?php if (!empty($cooldowns)): ?>
+                                            <ul class="route-list">
+                                                <?php foreach ($cooldowns as $index => $cooldown): ?>
+                                                    <?php $segment = $jumpStats['segments'][$index] ?? null; ?>
+                                                    <li>
+                                                        <div>
+                                                            Hop <?= htmlspecialchars((string) ($index + 1), ENT_QUOTES) ?>
+                                                            <?php if ($segment): ?>
+                                                                <span class="route-list-meta"><?= htmlspecialchars($segment['from'], ENT_QUOTES) ?> → <?= htmlspecialchars($segment['to'], ENT_QUOTES) ?></span>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                        <div><?= htmlspecialchars($formatLy((float) $cooldown), ENT_QUOTES) ?> min cooldown</div>
+                                                    </li>
+                                                <?php endforeach; ?>
+                                            </ul>
+                                            <div class="route-sublist-summary">
+                                                <?php if ($cooldownTotal !== null): ?>
+                                                    <span>Total cooldown: <?= htmlspecialchars($formatLy((float) $cooldownTotal), ENT_QUOTES) ?> min</span>
+                                                <?php endif; ?>
+                                                <?php if ($fatigueMinutes !== null): ?>
+                                                    <span>Fatigue remaining: <?= htmlspecialchars($formatLy((float) $fatigueMinutes), ENT_QUOTES) ?> min</span>
+                                                <?php endif; ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <p class="muted">No jump cooldowns logged.</p>
+                                        <?php endif; ?>
+                                    </div>
+
+                                    <div class="wait-banner">
+                                        <h4>Suggested waits</h4>
+                                        <?php if (!empty($waitExplanations)): ?>
+                                            <ul class="route-list">
+                                                <?php foreach ($waitExplanations as $line): ?>
+                                                    <li><?= htmlspecialchars((string) $line, ENT_QUOTES) ?></li>
+                                                <?php endforeach; ?>
+                                            </ul>
+                                            <?php if ($waitTotalMinutes !== null): ?>
+                                                <div class="route-sublist-summary">
+                                                    <span>Total wait: <?= htmlspecialchars($formatLy((float) $waitTotalMinutes), ENT_QUOTES) ?> min</span>
+                                                </div>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            <p class="muted">No cooldown waits required.</p>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php endif; ?>
 
                                 <div class="engine-metrics">
                                     <span>Nodes explored: <?= htmlspecialchars((string) ($route['nodes_explored'] ?? 0), ENT_QUOTES) ?></span>

@@ -278,6 +278,60 @@ button.loading .button-spinner {
     color: #9aa5b1;
 }
 
+.route-sublist {
+    background: #121824;
+    border: 1px solid #222a35;
+    border-radius: 12px;
+    padding: 12px;
+    display: grid;
+    gap: 10px;
+}
+
+.route-sublist h4,
+.wait-banner h4 {
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+.route-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 8px;
+    font-size: 0.85rem;
+}
+
+.route-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: baseline;
+}
+
+.route-list-meta {
+    margin-left: 6px;
+    color: #9aa5b1;
+    font-size: 0.8rem;
+}
+
+.route-sublist-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 0.8rem;
+    color: #cbd5e1;
+}
+
+.wait-banner {
+    border: 1px solid #243041;
+    border-radius: 12px;
+    padding: 12px;
+    background: #101721;
+    display: grid;
+    gap: 10px;
+}
+
 .route-breadcrumb {
     font-size: 0.9rem;
     display: flex;
