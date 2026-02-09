@@ -581,11 +581,9 @@ final class NavigationEngine
                             return INF;
                         }
                         $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
-                        $fatigue = 5.0 + ($distance * 6.0);
-                        $cooldown = max(1.0, $distance * 1.0);
+                        $cooldown = $this->estimateJumpCooldownMinutes($distance);
                         $riskScore = $this->riskScore($to);
                         return $distance
-                            + $fatigue
                             + $cooldown
                             + ($riskScore * $this->riskWeightCache)
                             + $this->npcStationBonus($system, $options)
@@ -618,7 +616,12 @@ final class NavigationEngine
 
                 $totalGateHops = $launch['gate_hops'] + $landing['gate_hops'];
                 $waitDetails = $this->buildJumpWaitDetails($jumpSegments, $options);
-                $totalCost = round($result['distance'] + $totalGateHops + $waitDetails['total_wait_minutes'], 2);
+                $jumpTravelMinutes = $this->jumpTravelMinutes($jumpSegments);
+                $cooldownPenalty = $this->cooldownCapPenaltyMinutes($jumpSegments, $options);
+                $totalCost = round(
+                    $totalGateHops + $jumpTravelMinutes + $waitDetails['total_wait_minutes'] + $cooldownPenalty,
+                    2
+                );
                 if ($totalCost >= $bestCost) {
                     continue;
                 }
@@ -628,6 +631,8 @@ final class NavigationEngine
                 $summary['illegal_systems_filtered'] = 0;
                 $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($jumpSegments), $options);
                 $summary += $waitDetails;
+                $summary['jump_travel_minutes'] = $jumpTravelMinutes;
+                $summary['cooldown_cap_penalty_minutes'] = $cooldownPenalty;
                 $summary['launch_system'] = $this->systemSummary($launchId);
                 $summary['landing_system'] = $this->systemSummary($landingId);
                 $summary['launch_gate_hops'] = $launch['gate_hops'];
@@ -1621,9 +1626,11 @@ final class NavigationEngine
                 }
             }
             $npcBonus = $this->npcStationBonus($system, $options);
-            $score = $distance
+            $estimatedJumpCooldown = $this->estimateJumpCooldownMinutes($distance);
+            $score = $hops
+                + $distance
+                + $estimatedJumpCooldown
                 + ($riskScore * $riskWeight)
-                + ($hops * 0.2)
                 - ($regionalGateCount * 0.3)
                 + $npcBonus;
             $gatePath = $this->buildGatePathFromPrev($paths['prev'], $systemId);
@@ -1644,6 +1651,7 @@ final class NavigationEngine
                 'regional_gate_count' => $regionalGateCount,
                 'npc_bonus' => round($npcBonus, 2),
                 'gate_hops' => $hops,
+                'estimated_jump_cooldown_minutes' => round($estimatedJumpCooldown, 2),
             ];
 
             $candidates[] = [
@@ -1880,6 +1888,70 @@ final class NavigationEngine
         return $jumpSegments;
     }
 
+    private function jumpTravelMinutes(array $jumpSegments): float
+    {
+        $total = 0.0;
+        foreach ($jumpSegments as $segment) {
+            $total += (float) ($segment['distance_ly'] ?? 0.0);
+        }
+        return round($total, 2);
+    }
+
+    private function estimateJumpCooldownMinutes(float $distanceLy): float
+    {
+        return min(30.0, max(1.0, 1.0 + $distanceLy));
+    }
+
+    private function cooldownCapPenaltyMinutes(array $jumpSegments, array $options): float
+    {
+        if ($jumpSegments === []) {
+            return 0.0;
+        }
+
+        $fatigue = $this->fatigueModel->evaluateWithWaits($this->jumpSegments($jumpSegments), $options);
+        $cooldowns = $fatigue['cooldowns_minutes'];
+        $cap = (float) ($fatigue['caps']['max_cooldown_minutes'] ?? 30.0);
+        $lastIndex = count($jumpSegments) - 1;
+        $firstCapIndex = null;
+
+        foreach ($cooldowns as $index => $cooldown) {
+            if ($index >= $lastIndex) {
+                continue;
+            }
+            if ((float) $cooldown >= $cap - 0.01) {
+                $firstCapIndex = $index;
+                break;
+            }
+        }
+
+        if ($firstCapIndex === null) {
+            return 0.0;
+        }
+
+        $capSegment = $jumpSegments[$firstCapIndex] ?? null;
+        if ($capSegment === null) {
+            return 0.0;
+        }
+
+        $toId = (int) ($capSegment['to_id'] ?? 0);
+        $system = $toId > 0 ? ($this->systems[$toId] ?? null) : null;
+        if ($system !== null && $this->isSafeWaitSystem($system)) {
+            return 0.0;
+        }
+
+        $remainingJumps = max(0, $lastIndex - $firstCapIndex);
+        return round($remainingJumps * 5.0, 2);
+    }
+
+    private function isSafeWaitSystem(array $system): bool
+    {
+        $npcCount = (int) ($system['npc_station_count'] ?? 0);
+        $hasNpcStation = !empty($system['has_npc_station']) || $npcCount > 0;
+        $security = (float) ($system['security'] ?? 0.0);
+
+        return $hasNpcStation || $security >= 0.5;
+    }
+
     private function buildJumpWaitDetails(array $jumpSegments, array $options): array
     {
         if ($jumpSegments === []) {
@@ -1887,12 +1959,14 @@ final class NavigationEngine
                 'jump_waits' => [],
                 'total_wait_minutes' => 0.0,
                 'wait_systems' => [],
+                'wait_explanations' => [],
             ];
         }
 
         $fatigue = $this->fatigueModel->evaluateWithWaits($this->jumpSegments($jumpSegments), $options);
         $waits = $fatigue['waits_minutes'];
         $waitSystems = [];
+        $waitExplanations = [];
         foreach ($jumpSegments as $index => $segment) {
             $wait = $waits[$index] ?? 0.0;
             if ($wait <= 0.0) {
@@ -1902,16 +1976,23 @@ final class NavigationEngine
             if ($toId <= 0) {
                 continue;
             }
+            $systemName = (string) ($segment['to'] ?? $toId);
             $waitSystems[] = [
                 'id' => $toId,
-                'name' => (string) ($segment['to'] ?? $toId),
+                'name' => $systemName,
             ];
+            $waitExplanations[] = sprintf(
+                'Wait %.1f min at %s due to jump activation cooldown.',
+                $wait,
+                $systemName
+            );
         }
 
         return [
             'jump_waits' => $waits,
             'total_wait_minutes' => $fatigue['total_wait_minutes'],
             'wait_systems' => $waitSystems,
+            'wait_explanations' => $waitExplanations,
         ];
     }
 
