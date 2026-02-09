@@ -50,7 +50,7 @@ $pdo = $connection->pdo();
 $pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, region_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
 $pdo->exec('CREATE TABLE stargates (from_system_id INTEGER, to_system_id INTEGER, is_regional_gate INTEGER)');
 $pdo->exec('CREATE TABLE system_risk (system_id INTEGER, kills_last_1h INTEGER, kills_last_24h INTEGER, pod_kills_last_1h INTEGER, pod_kills_last_24h INTEGER, last_updated_at TEXT)');
-$pdo->exec('CREATE TABLE jump_neighbors (system_id INTEGER, range_ly INTEGER, neighbor_count INTEGER, neighbor_ids_blob BLOB, updated_at TEXT)');
+$pdo->exec('CREATE TABLE jump_neighbors (system_id INTEGER, range_ly INTEGER, neighbor_count INTEGER, neighbor_ids_blob BLOB, encoding_version INTEGER, updated_at TEXT)');
 
 $metersPerLy = JumpMath::METERS_PER_LY;
 $systems = [
@@ -69,14 +69,14 @@ foreach ($systems as $system) {
 
 function packNeighbors(array $neighborIds): string
 {
-    return JumpNeighborCodec::encodeNeighborIds($neighborIds);
+    return JumpNeighborCodec::encodeV1($neighborIds);
 }
 
 function insertNeighbors(PDO $pdo, int $systemId, int $range, array $neighborIds): void
 {
     $payload = packNeighbors($neighborIds);
-    $stmt = $pdo->prepare('INSERT INTO jump_neighbors VALUES (?, ?, ?, ?, ?)');
-    $stmt->execute([$systemId, $range, count($neighborIds), $payload, gmdate('c')]);
+    $stmt = $pdo->prepare('INSERT INTO jump_neighbors VALUES (?, ?, ?, ?, ?, ?)');
+    $stmt->execute([$systemId, $range, count($neighborIds), $payload, 1, gmdate('c')]);
 }
 
 $neighborMap7 = [
