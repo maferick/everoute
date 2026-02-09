@@ -2,27 +2,26 @@
 
 declare(strict_types=1);
 
-use Everoute\Universe\JumpNeighborRepository;
+use Everoute\Universe\JumpNeighborCodec;
 
 $autoload = __DIR__ . '/../vendor/autoload.php';
 if (file_exists($autoload)) {
     require_once $autoload;
 } else {
-    require_once __DIR__ . '/../src/Universe/JumpNeighborRepository.php';
+    require_once __DIR__ . '/../src/Universe/JumpNeighborCodec.php';
 }
 
 $neighborIds = [1, 42, 65535, 123456789];
 
-$compressed = JumpNeighborRepository::encodeNeighborIds($neighborIds, true);
-$decodedCompressed = JumpNeighborRepository::decodeNeighborIds($compressed);
-if ($decodedCompressed !== $neighborIds) {
-    throw new RuntimeException('Compressed neighbor id roundtrip failed.');
+$encoded = JumpNeighborCodec::encodeNeighborIds($neighborIds);
+$decoded = JumpNeighborCodec::decodeNeighborIds($encoded);
+if ($decoded !== $neighborIds) {
+    throw new RuntimeException('Neighbor id roundtrip failed.');
 }
 
-$packed = JumpNeighborRepository::encodeNeighborIds($neighborIds, false);
-$decodedPacked = JumpNeighborRepository::decodeNeighborIds($packed);
-if ($decodedPacked !== $neighborIds) {
-    throw new RuntimeException('Packed neighbor id roundtrip failed.');
+$neighborCount = count($neighborIds);
+if (count($decoded) !== $neighborCount) {
+    throw new RuntimeException('Neighbor id decoded count mismatch.');
 }
 
-echo "Jump neighbor repository decode test passed.\n";
+echo "Jump neighbor codec test passed.\n";

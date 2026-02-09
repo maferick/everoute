@@ -28,6 +28,7 @@ final class NavigationEngine
         private JumpRangeCalculator $jumpRangeCalculator,
         private JumpFatigueModel $fatigueModel,
         private ShipRules $shipRules,
+        private SystemLookup $systemLookup,
         private Logger $logger
     ) {
         $this->loadData();
@@ -41,8 +42,8 @@ final class NavigationEngine
 
     public function compute(array $options): array
     {
-        $start = GraphStore::systemByNameOrId($options['from']);
-        $end = GraphStore::systemByNameOrId($options['to']);
+        $start = $this->systemLookup->resolveByNameOrId($options['from']);
+        $end = $this->systemLookup->resolveByNameOrId($options['to']);
 
         if ($start === null || $end === null) {
             return ['error' => 'Unknown system'];
@@ -51,6 +52,7 @@ final class NavigationEngine
         $shipType = $this->resolveShipType($options);
         $jumpSkillLevel = (int) ($options['jump_skill_level'] ?? 0);
         $effectiveRange = $this->jumpRangeCalculator->effectiveRange($shipType, $jumpSkillLevel);
+        $rangeBucketFloor = $effectiveRange !== null ? (int) floor($effectiveRange) : null;
         $rangeBucket = $this->resolveRangeBucket($effectiveRange);
         $debugEnabled = Env::bool('APP_DEBUG', false) || !empty($options['debug']);
 
@@ -84,8 +86,17 @@ final class NavigationEngine
 
         if ($debugEnabled) {
             $payload['debug'] = [
+                'origin' => [
+                    'name' => $start['name'] ?? (string) $start['id'],
+                    'id' => (int) $start['id'],
+                ],
+                'destination' => [
+                    'name' => $end['name'] ?? (string) $end['id'],
+                    'id' => (int) $end['id'],
+                ],
                 'effective_range_ly' => $effectiveRange,
-                'range_bucket' => $rangeBucket,
+                'range_bucket_floor' => $rangeBucketFloor,
+                'range_bucket_clamped' => $rangeBucket,
                 'gate_nodes_explored' => $gateRoute['nodes_explored'] ?? 0,
                 'jump_nodes_explored' => $jumpRoute['nodes_explored'] ?? 0,
                 'hybrid_nodes_explored' => $hybridRoute['nodes_explored'] ?? 0,
@@ -95,6 +106,9 @@ final class NavigationEngine
                     'hybrid' => $hybridRoute['illegal_systems_filtered'] ?? 0,
                 ],
             ];
+            if (isset($jumpRoute['debug']) && is_array($jumpRoute['debug'])) {
+                $payload['debug']['jump_origin'] = $jumpRoute['debug'];
+            }
         }
 
         return $payload;
@@ -292,12 +306,13 @@ final class NavigationEngine
         }
 
         $debugLogs = $this->isJumpDebugEnabled($options);
+        $originDiagnostics = [];
         if ($debugLogs) {
             $this->logger->debug('Jump route bucket selection', [
                 'effective_range_ly' => $effectiveRange,
                 'bucket' => $rangeBucket,
             ]);
-            $this->logJumpOriginNeighborDiagnostics($startId, $endId, $shipType, $options, $rangeBucket);
+            $originDiagnostics = $this->logJumpOriginNeighborDiagnostics($startId, $endId, $shipType, $options, $rangeBucket);
         }
 
         $neighbors = $this->jumpNeighborRepo->loadRangeBucket($rangeBucket, count($this->systems));
@@ -307,6 +322,7 @@ final class NavigationEngine
                 'reason' => 'Missing precomputed jump neighbors.',
                 'nodes_explored' => 0,
                 'illegal_systems_filtered' => 0,
+                'debug' => $originDiagnostics,
             ];
         }
 
@@ -323,6 +339,7 @@ final class NavigationEngine
                 'reason' => 'Start or destination not allowed for jumping.',
                 'nodes_explored' => 0,
                 'illegal_systems_filtered' => $graph['filtered'],
+                'debug' => $originDiagnostics,
             ];
         }
 
@@ -353,6 +370,7 @@ final class NavigationEngine
                 'reason' => 'No jump route found.',
                 'nodes_explored' => $result['nodes_explored'],
                 'illegal_systems_filtered' => $graph['filtered'],
+                'debug' => $originDiagnostics,
             ];
         }
 
@@ -366,6 +384,7 @@ final class NavigationEngine
                 'reason' => 'Jump route failed validation.',
                 'nodes_explored' => $result['nodes_explored'],
                 'illegal_systems_filtered' => $graph['filtered'],
+                'debug' => $originDiagnostics,
             ];
         }
 
@@ -373,6 +392,7 @@ final class NavigationEngine
         $summary['nodes_explored'] = $result['nodes_explored'];
         $summary['illegal_systems_filtered'] = $graph['filtered'];
         $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($segments));
+        $summary['debug'] = $originDiagnostics;
         return $summary;
     }
 
@@ -765,11 +785,20 @@ final class NavigationEngine
         string $shipType,
         array $options,
         int $rangeBucket
-    ): void {
+    ): array {
         $origin = $this->systems[$startId] ?? null;
         if ($origin === null) {
             $this->logger->debug('Jump origin missing system data', ['origin_id' => $startId]);
-            return;
+            return [
+                'origin_id' => $startId,
+                'db_neighbor_count' => 0,
+                'decoded_count' => 0,
+                'filtered_highsec' => 0,
+                'filtered_avoided' => 0,
+                'filtered_other' => 0,
+                'filtered_other_reasons' => [],
+                'note' => 'Jump neighbors empty at origin: decode/query/mapping failure.',
+            ];
         }
 
         $this->logger->debug('Jump origin resolved', [
@@ -792,7 +821,17 @@ final class NavigationEngine
                 'origin_id' => $startId,
                 'bucket' => $rangeBucket,
             ]);
-            return;
+            return [
+                'origin_id' => $startId,
+                'origin_name' => $origin['name'] ?? (string) $startId,
+                'db_neighbor_count' => 0,
+                'decoded_count' => 0,
+                'filtered_highsec' => 0,
+                'filtered_avoided' => 0,
+                'filtered_other' => 0,
+                'filtered_other_reasons' => [],
+                'note' => 'Jump neighbors empty at origin: decode/query/mapping failure.',
+            ];
         }
 
         $decodedNeighbors = $originNeighbors['neighbor_ids'];
@@ -801,15 +840,15 @@ final class NavigationEngine
         $this->logger->debug('Jump origin neighbor payload', [
             'origin_id' => $startId,
             'bucket' => $rangeBucket,
-            'fetched_neighbor_count' => $fetchedCount,
-            'decoded_neighbor_count' => $decodedCount,
+            'db_neighbor_count' => $fetchedCount,
+            'decoded_count' => $decodedCount,
         ]);
 
         if ($decodedCount === 0 && $fetchedCount > 0) {
-            $this->logger->warning('Jump neighbors empty at origin. Likely decode/DB mismatch.', [
+            $this->logger->warning('Jump neighbors empty at origin: decode/query/mapping failure.', [
                 'origin_id' => $startId,
                 'bucket' => $rangeBucket,
-                'fetched_neighbor_count' => $fetchedCount,
+                'db_neighbor_count' => $fetchedCount,
             ]);
         }
 
@@ -865,7 +904,18 @@ final class NavigationEngine
                 'origin_id' => $startId,
                 'bucket' => $rangeBucket,
             ]);
-            return;
+            return [
+                'origin_id' => $startId,
+                'origin_name' => $origin['name'] ?? (string) $startId,
+                'origin_security' => (float) ($origin['security'] ?? 0.0),
+                'db_neighbor_count' => 0,
+                'decoded_count' => 0,
+                'filtered_highsec' => 0,
+                'filtered_avoided' => 0,
+                'filtered_other' => 0,
+                'filtered_other_reasons' => [],
+                'note' => 'Jump neighbors empty at origin: decode/query/mapping failure.',
+            ];
         }
 
         if ($beforeList === [] && $decodedCount > 0) {
@@ -881,6 +931,22 @@ final class NavigationEngine
                 'bucket' => $rangeBucket,
             ]);
         }
+
+        $diagnostics = [
+            'origin_id' => $startId,
+            'origin_name' => $origin['name'] ?? (string) $startId,
+            'origin_security' => (float) ($origin['security'] ?? 0.0),
+            'db_neighbor_count' => $fetchedCount,
+            'decoded_count' => $decodedCount,
+            'filtered_highsec' => $filteredCounts['filtered_highsec'],
+            'filtered_avoided' => $filteredCounts['filtered_avoided'],
+            'filtered_other' => $filteredCounts['filtered_other'],
+            'filtered_other_reasons' => array_keys($filteredOtherReasons),
+        ];
+        if ($decodedCount === 0) {
+            $diagnostics['note'] = 'Jump neighbors empty at origin: decode/query/mapping failure.';
+        }
+        return $diagnostics;
     }
 
     /** @return array<int, array{name:string, security:float}> */

@@ -7,6 +7,7 @@ namespace Everoute\Cli;
 use Everoute\Routing\JumpMath;
 use Everoute\Routing\JumpNeighborGraphBuilder;
 use Everoute\Routing\JumpRangeCalculator;
+use Everoute\Universe\JumpNeighborCodec;
 use Everoute\Universe\PrecomputeCheckpointRepository;
 use Everoute\Universe\JumpNeighborValidator;
 use Everoute\Universe\SystemRepository;
@@ -114,8 +115,8 @@ final class PrecomputeJumpNeighborsCommand extends Command
                 }
                 $prevCount = $count;
 
-                $payload = gzcompress($this->packNeighborIds($neighborIds));
-                $payloadBytes = is_string($payload) ? strlen($payload) : 0;
+                $payload = JumpNeighborCodec::encodeNeighborIds($neighborIds);
+                $payloadBytes = strlen($payload);
                 $totalStoredBytes += $payloadBytes;
                 if ($storageWarningBytes > 0 && $totalStoredBytes >= $storageWarningBytes) {
                     $output->writeln(sprintf(
@@ -350,15 +351,6 @@ final class PrecomputeJumpNeighborsCommand extends Command
         $minutes = intdiv($seconds % 3600, 60);
         $secs = $seconds % 60;
         return sprintf('%02dh:%02dm:%02ds', $hours, $minutes, $secs);
-    }
-
-    /** @param int[] $neighborIds */
-    private function packNeighborIds(array $neighborIds): string
-    {
-        if ($neighborIds === []) {
-            return '';
-        }
-        return pack('N*', ...$neighborIds);
     }
 
     private function tableExists(\PDO $pdo, string $table): bool

@@ -12,6 +12,7 @@ use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\NavigationEngine;
 use Everoute\Routing\RouteService;
 use Everoute\Routing\ShipRules;
+use Everoute\Routing\SystemLookup;
 use Everoute\Security\Logger;
 use Everoute\Universe\JumpNeighborRepository;
 use Everoute\Universe\StargateRepository;
@@ -41,19 +42,22 @@ final class CacheWarmCommand extends Command
         $heatmapTtl = Env::int('RISK_HEATMAP_TTL_SECONDS', 30);
         $routeCacheTtl = Env::int('ROUTE_CACHE_TTL_SECONDS', 600);
 
+        $logger = new Logger();
+        $systems = new SystemRepository($connection);
         $engine = new NavigationEngine(
-            new SystemRepository($connection),
+            $systems,
             new StargateRepository($connection),
-            new JumpNeighborRepository($connection),
+            new JumpNeighborRepository($connection, $logger),
             new RiskRepository($connection, $riskCache, $riskCacheTtl, $heatmapTtl),
             new JumpRangeCalculator(__DIR__ . '/../../config/ships.php', __DIR__ . '/../../config/jump_ranges.php'),
             new JumpFatigueModel(),
             new ShipRules(),
-            new Logger()
+            new SystemLookup($systems),
+            $logger
         );
         $service = new RouteService(
             $engine,
-            new Logger(),
+            $logger,
             $riskCache,
             $routeCacheTtl
         );
