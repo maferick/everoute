@@ -333,7 +333,7 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                                     </div>
 
                                     <details class="route-details">
-                                        <summary>View full route</summary>
+                                        <summary>View steps</summary>
                                         <div class="table-wrap">
                                             <table>
                                                 <thead>
