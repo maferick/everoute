@@ -30,6 +30,11 @@ if (file_exists($autoload)) {
     require_once __DIR__ . '/../src/Universe/SystemRepository.php';
 }
 
+if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+    echo "SQLite driver not available, skipping jump planner space rules test.\n";
+    exit(0);
+}
+
 /**
  * @param array<int, array<int, mixed>> $systemsData
  * @return array{0:JumpPlanner,1:array<int,array<string,mixed>>}
