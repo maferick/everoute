@@ -17,5 +17,9 @@ Everoute's capital jump planning follows EVE Online mechanics references:
 - Caps applied:
   - Fatigue ≤ 300 minutes (5 hours).
   - Activation cooldown ≤ 30 minutes.
+- Wait-time guidance:
+  - The planner provides per-hop wait estimates (`jump_waits`) and a chain total (`total_wait_minutes`).
+  - Recommended waits are based on the activation cooldown after each hop; the final hop typically has no wait requirement.
+  - If cumulative fatigue approaches the cap, consider pausing until fatigue drops below 60 minutes to reduce risk labels.
 
 These estimates are deterministic and meant for planning; they should align with CCP guidance for relative comparisons, not serve as an in-client timer replacement.
