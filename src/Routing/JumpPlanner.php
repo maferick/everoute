@@ -260,7 +260,7 @@ final class JumpPlanner
             ];
         }
 
-        $fatigue = $this->fatigueModel->evaluate($segments);
+        $fatigue = $this->fatigueModel->evaluate($segments, $options);
         $cooldownMinutes = $fatigue['cooldown_total_minutes'];
         $jumpTime = count($segments) * self::BASE_JUMP_TIME_S;
         $dockTime = count($midpoints) * self::DOCK_OVERHEAD_S;
