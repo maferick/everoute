@@ -48,7 +48,7 @@ final class NavigationEngine
             return ['error' => 'Unknown system'];
         }
 
-        $shipType = $this->shipRules->normalizeShipType((string) ($options['jump_ship_type'] ?? ''));
+        $shipType = $this->resolveShipType($options);
         $jumpSkillLevel = (int) ($options['jump_skill_level'] ?? 0);
         $effectiveRange = $this->jumpRangeCalculator->effectiveRange($shipType, $jumpSkillLevel);
         $rangeBucket = $effectiveRange !== null ? (int) floor($effectiveRange) : null;
@@ -98,6 +98,23 @@ final class NavigationEngine
         }
 
         return $payload;
+    }
+
+    private function resolveShipType(array $options): string
+    {
+        $mode = (string) ($options['mode'] ?? 'subcap');
+        $shipClass = JumpShipType::normalizeJumpShipType((string) ($options['ship_class'] ?? ''));
+        $jumpShipType = (string) ($options['jump_ship_type'] ?? '');
+
+        if ($mode === 'capital'
+            || in_array($shipClass, JumpShipType::CAPITALS, true)
+            || $shipClass === JumpShipType::JUMP_FREIGHTER
+        ) {
+            $candidate = $jumpShipType !== '' ? $jumpShipType : $shipClass;
+            return $this->shipRules->normalizeShipType($candidate);
+        }
+
+        return '';
     }
 
     private function computeGateRoute(int $startId, int $endId, string $shipType, array $options): array
