@@ -22,6 +22,11 @@ php bin/console import:risk --file data/risk.json
 php bin/console install --schema-only --app-user everoute_app --app-pass <password>
 ```
 
+## Reset (drop and rebuild tables)
+```bash
+php bin/console install --reset --app-user everoute_app --app-pass <password>
+```
+
 ## SDE Configuration
 Set optional environment values in `.env`:
 - `SDE_STORAGE_PATH` (default `/var/lib/everoute/sde`)
