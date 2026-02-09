@@ -11,17 +11,15 @@ use Everoute\Http\Request;
 use Everoute\Http\Response;
 use Everoute\Http\Router;
 use Everoute\Risk\RiskRepository;
-use Everoute\Routing\JumpPlanner;
 use Everoute\Routing\JumpFatigueModel;
 use Everoute\Routing\JumpRangeCalculator;
-use Everoute\Routing\MovementRules;
+use Everoute\Routing\NavigationEngine;
 use Everoute\Routing\RouteService;
-use Everoute\Routing\WeightCalculator;
+use Everoute\Routing\ShipRules;
 use Everoute\Security\Csrf;
 use Everoute\Security\Logger;
 use Everoute\Security\RateLimiter;
 use Everoute\Security\Validator;
-use Everoute\Universe\GateDistanceRepository;
 use Everoute\Universe\JumpNeighborRepository;
 use Everoute\Universe\StargateRepository;
 use Everoute\Universe\SystemRepository;
@@ -54,26 +52,22 @@ $routeCacheTtl = Env::int('ROUTE_CACHE_TTL_SECONDS', 600);
 $systems = new SystemRepository($connection);
 $stargates = new StargateRepository($connection);
 $riskRepo = new RiskRepository($connection, $riskCache, $riskCacheTtl, $heatmapTtl);
-$gateDistances = new GateDistanceRepository($connection);
 $jumpNeighbors = new JumpNeighborRepository($connection);
-
-$weightCalculator = new WeightCalculator();
-$movementRules = new MovementRules();
-$jumpRanges = new JumpRangeCalculator(__DIR__ . '/../config/ships.php', __DIR__ . '/../config/jump_ranges.php');
-$jumpPlanner = new JumpPlanner($jumpRanges, $weightCalculator, $movementRules, new JumpFatigueModel(), $logger, $jumpNeighbors);
-
-$routeService = new RouteService(
+$engine = new NavigationEngine(
     $systems,
     $stargates,
+    $jumpNeighbors,
     $riskRepo,
-    $weightCalculator,
-    $movementRules,
-    $jumpPlanner,
+    new JumpRangeCalculator(__DIR__ . '/../config/ships.php', __DIR__ . '/../config/jump_ranges.php'),
+    new JumpFatigueModel(),
+    new ShipRules(),
+    $logger
+);
+$routeService = new RouteService(
+    $engine,
     $logger,
     $riskCache,
-    $routeCacheTtl,
-    $riskCacheTtl,
-    $gateDistances
+    $routeCacheTtl
 );
 
 $validator = new Validator();

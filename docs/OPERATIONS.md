@@ -97,15 +97,15 @@ php bin/console precompute:gate-distances --source-ids=30000142,30000144 --max-h
 Precomputes reachable neighbors within configured jump ranges and stores compressed adjacency blobs (`gzcompress`).
 ```bash
 # default ranges from config/jump_ranges.php
-php bin/console precompute:jump-neighbors --hours=1
+php bin/console jump:precompute --hours=1
 
 # explicit ranges
-php bin/console precompute:jump-neighbors --ranges=5,6,7,8,9,10 --hours=24 --resume
+php bin/console jump:precompute --ranges=5,6,7,8,9,10 --hours=24 --resume
 ```
 
 Suggested cron (off-peak, resumable):
 ```cron
-15 4 * * 1 flock -n /var/lock/everoute-precompute-jump-neighbors.lock /usr/bin/php /var/www/everoute/bin/console precompute:jump-neighbors --hours=6 --resume
+15 4 * * 1 flock -n /var/lock/everoute-precompute-jump-neighbors.lock /usr/bin/php /var/www/everoute/bin/console jump:precompute --hours=6 --resume
 ```
 
 ### Performance tuning knobs

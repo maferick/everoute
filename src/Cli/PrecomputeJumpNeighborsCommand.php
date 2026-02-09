@@ -18,7 +18,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
 {
     use DbAware;
 
-    protected static $defaultName = 'precompute:jump-neighbors';
+    protected static $defaultName = 'jump:precompute';
 
     protected function configure(): void
     {
@@ -98,7 +98,9 @@ final class PrecomputeJumpNeighborsCommand extends Command
                 $system = $systems[$systemId];
                 $neighbors = $builder->buildNeighborsForSystem($system, $systems, $bucketIndex, $rangeMeters);
                 $neighbors = $this->capNeighbors($neighbors, $neighborCap, $output, $systemId, $rangeLy);
-                $payload = gzcompress(json_encode($neighbors, JSON_THROW_ON_ERROR));
+                $neighborIds = array_map('intval', array_keys($neighbors));
+                sort($neighborIds);
+                $payload = gzcompress($this->packNeighborIds($neighborIds));
                 $payloadBytes = is_string($payload) ? strlen($payload) : 0;
                 $totalStoredBytes += $payloadBytes;
                 if ($storageWarningBytes > 0 && $totalStoredBytes >= $storageWarningBytes) {
@@ -136,7 +138,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
                 $params = [
                     'system_id' => $systemId,
                     'range_ly' => $rangeLy,
-                    'neighbor_count' => count($neighbors),
+                    'neighbor_count' => count($neighborIds),
                     'payload' => $payload,
                 ];
                 if ($rangeBucketColumn !== null) {
@@ -258,6 +260,15 @@ final class PrecomputeJumpNeighborsCommand extends Command
         $minutes = intdiv($seconds % 3600, 60);
         $secs = $seconds % 60;
         return sprintf('%02dh:%02dm:%02ds', $hours, $minutes, $secs);
+    }
+
+    /** @param int[] $neighborIds */
+    private function packNeighborIds(array $neighborIds): string
+    {
+        if ($neighborIds === []) {
+            return '';
+        }
+        return pack('N*', ...$neighborIds);
     }
 
     private function tableExists(\PDO $pdo, string $table): bool
