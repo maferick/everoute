@@ -82,6 +82,7 @@ final class NavigationEngine
             'hybrid_route' => $hybridRoute,
             'best' => $best,
             'explanation' => $explanation,
+            'effective_range_ly' => $effectiveRange,
         ];
 
         if ($debugEnabled) {
@@ -1268,6 +1269,8 @@ final class NavigationEngine
             'name' => $system['name'] ?? (string) $systemId,
             'security' => (float) ($system['security'] ?? 0.0),
             'security_raw' => array_key_exists('security_raw', $system) ? (float) $system['security_raw'] : null,
+            'security_nav' => array_key_exists('security_nav', $system) ? (float) $system['security_nav'] : null,
+            'has_npc_station' => isset($system['has_npc_station']) ? (bool) $system['has_npc_station'] : null,
         ];
     }
 

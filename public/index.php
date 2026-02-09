@@ -80,6 +80,7 @@ $api = new ApiController($routeService, $riskRepo, $systems, $validator, $rateLi
 $router = new Router();
 $router->add('GET', '/api/v1/health', [$api, 'health']);
 $router->add('POST', '/api/v1/route', [$api, 'route']);
+$router->add('GET', '/api/v1/systems', [$api, 'systemSearch']);
 $router->add('GET', '/api/v1/system-risk', [$api, 'systemRisk']);
 $router->add('GET', '/api/v1/heatmap', [$api, 'heatmap']);
 
@@ -93,8 +94,6 @@ try {
 
     $csrf = new Csrf();
     $token = $csrf->ensureToken();
-    $systemOptions = $systems->listAll();
-
     if ($request->method === 'POST') {
         if (!$csrf->validate($_POST['csrf_token'] ?? null)) {
             $response = new Response(400, ['Content-Type' => 'text/plain'], 'Invalid CSRF token');
@@ -104,8 +103,10 @@ try {
         }
 
         $payload = [
-            'from' => $_POST['from'] ?? '',
-            'to' => $_POST['to'] ?? '',
+            'from' => $_POST['from_id'] ?? ($_POST['from'] ?? ''),
+            'to' => $_POST['to_id'] ?? ($_POST['to'] ?? ''),
+            'from_id' => $_POST['from_id'] ?? '',
+            'to_id' => $_POST['to_id'] ?? '',
             'mode' => $_POST['mode'] ?? 'subcap',
             'ship_class' => $_POST['ship_class'] ?? 'subcap',
             'jump_ship_type' => $_POST['jump_ship_type'] ?? '',
