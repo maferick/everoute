@@ -384,14 +384,15 @@ final class NavigationEngine
             $graph['neighbors'],
             $startId,
             $endId,
-            function (int $from, int $to, mixed $edgeData) use ($options): float {
+            function (int $from, int $to, mixed $edgeData) use ($options, $shipType): float {
                 $system = $this->systems[$to] ?? null;
                 if ($system === null) {
                     return INF;
                 }
                 $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
-                $fatigue = 5.0 + ($distance * 6.0);
-                $cooldown = max(1.0, $distance * 1.0);
+                $metrics = $this->fatigueModel->lookupHopMetricsForShipType($shipType, $distance);
+                $fatigue = $metrics['jump_fatigue_minutes'];
+                $cooldown = $metrics['jump_activation_minutes'];
                 $riskScore = $this->riskScore($to);
                 return $distance
                     + $fatigue
@@ -575,13 +576,13 @@ final class NavigationEngine
                     $jumpNeighbors,
                     $launchId,
                     $landingId,
-                    function (int $from, int $to, mixed $edgeData) use ($options): float {
+                    function (int $from, int $to, mixed $edgeData) use ($options, $shipType): float {
                         $system = $this->systems[$to] ?? null;
                         if ($system === null) {
                             return INF;
                         }
                         $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
-                        $cooldown = $this->estimateJumpCooldownMinutes($distance);
+                        $cooldown = $this->estimateJumpCooldownMinutes($shipType, $distance);
                         $riskScore = $this->riskScore($to);
                         return $distance
                             + $cooldown
@@ -1008,14 +1009,15 @@ final class NavigationEngine
                 $graph['neighbors'],
                 $startId,
                 $endId,
-                function (int $from, int $to, mixed $edgeData) use ($options): float {
+                function (int $from, int $to, mixed $edgeData) use ($options, $shipType): float {
                     $system = $this->systems[$to] ?? null;
                     if ($system === null) {
                         return INF;
                     }
                     $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
-                    $fatigue = 5.0 + ($distance * 6.0);
-                    $cooldown = max(1.0, $distance * 1.0);
+                    $metrics = $this->fatigueModel->lookupHopMetricsForShipType($shipType, $distance);
+                    $fatigue = $metrics['jump_fatigue_minutes'];
+                    $cooldown = $metrics['jump_activation_minutes'];
                     $riskScore = $this->riskScore($to);
                     return $distance
                         + $fatigue
@@ -1626,7 +1628,7 @@ final class NavigationEngine
                 }
             }
             $npcBonus = $this->npcStationBonus($system, $options);
-            $estimatedJumpCooldown = $this->estimateJumpCooldownMinutes($distance);
+            $estimatedJumpCooldown = $this->estimateJumpCooldownMinutes($shipType, $distance);
             $score = $hops
                 + $distance
                 + $estimatedJumpCooldown
@@ -1897,9 +1899,10 @@ final class NavigationEngine
         return round($total, 2);
     }
 
-    private function estimateJumpCooldownMinutes(float $distanceLy): float
+    private function estimateJumpCooldownMinutes(string $shipType, float $distanceLy): float
     {
-        return min(30.0, max(1.0, 1.0 + $distanceLy));
+        $metrics = $this->fatigueModel->lookupHopMetricsForShipType($shipType, $distanceLy);
+        return $metrics['jump_activation_minutes'];
     }
 
     private function cooldownCapPenaltyMinutes(array $jumpSegments, array $options): float
