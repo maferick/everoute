@@ -9,7 +9,9 @@ use Everoute\Routing\JumpMath;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\NavigationEngine;
 use Everoute\Routing\ShipRules;
+use Everoute\Routing\SystemLookup;
 use Everoute\Security\Logger;
+use Everoute\Universe\JumpNeighborCodec;
 use Everoute\Universe\JumpNeighborRepository;
 use Everoute\Universe\StargateRepository;
 use Everoute\Universe\SystemRepository;
@@ -29,7 +31,9 @@ if (file_exists($autoload)) {
     require_once __DIR__ . '/../src/Routing/JumpRangeCalculator.php';
     require_once __DIR__ . '/../src/Routing/NavigationEngine.php';
     require_once __DIR__ . '/../src/Routing/ShipRules.php';
+    require_once __DIR__ . '/../src/Routing/SystemLookup.php';
     require_once __DIR__ . '/../src/Security/Logger.php';
+    require_once __DIR__ . '/../src/Universe/JumpNeighborCodec.php';
     require_once __DIR__ . '/../src/Universe/JumpNeighborRepository.php';
     require_once __DIR__ . '/../src/Universe/StargateRepository.php';
     require_once __DIR__ . '/../src/Universe/SystemRepository.php';
@@ -65,10 +69,7 @@ foreach ($systems as $system) {
 
 function packNeighbors(array $neighborIds): string
 {
-    if ($neighborIds === []) {
-        return '';
-    }
-    return gzcompress(pack('N*', ...$neighborIds));
+    return JumpNeighborCodec::encodeNeighborIds($neighborIds);
 }
 
 function insertNeighbors(PDO $pdo, int $systemId, int $range, array $neighborIds): void
@@ -99,15 +100,18 @@ foreach ($neighborMap10 as $systemId => $neighbors) {
     insertNeighbors($pdo, $systemId, 10, $neighbors);
 }
 
+$logger = new Logger();
+$systemsRepo = new SystemRepository($connection);
 $engine = new NavigationEngine(
-    new SystemRepository($connection),
+    $systemsRepo,
     new StargateRepository($connection),
-    new JumpNeighborRepository($connection),
+    new JumpNeighborRepository($connection, $logger),
     new RiskRepository($connection),
     new JumpRangeCalculator(__DIR__ . '/../config/ships.php', __DIR__ . '/../config/jump_ranges.php'),
     new JumpFatigueModel(),
     new ShipRules(),
-    new Logger()
+    new SystemLookup($systemsRepo),
+    $logger
 );
 
 $optionsCarrier = [

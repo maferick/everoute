@@ -8,6 +8,7 @@ use Everoute\Routing\JumpFatigueModel;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\NavigationEngine;
 use Everoute\Routing\ShipRules;
+use Everoute\Routing\SystemLookup;
 use Everoute\Security\Logger;
 use Everoute\Universe\JumpNeighborRepository;
 use Everoute\Universe\StargateRepository;
@@ -28,6 +29,7 @@ if (file_exists($autoload)) {
     require_once __DIR__ . '/../src/Routing/JumpRangeCalculator.php';
     require_once __DIR__ . '/../src/Routing/NavigationEngine.php';
     require_once __DIR__ . '/../src/Routing/ShipRules.php';
+    require_once __DIR__ . '/../src/Routing/SystemLookup.php';
     require_once __DIR__ . '/../src/Security/Logger.php';
     require_once __DIR__ . '/../src/Universe/JumpNeighborRepository.php';
     require_once __DIR__ . '/../src/Universe/StargateRepository.php';
@@ -77,15 +79,18 @@ foreach ($edges as [$from, $to]) {
     $gateStmt->execute([$to, $from, 0]);
 }
 
+$logger = new Logger();
+$systemsRepo = new SystemRepository($connection);
 $engine = new NavigationEngine(
-    new SystemRepository($connection),
+    $systemsRepo,
     new StargateRepository($connection),
-    new JumpNeighborRepository($connection),
+    new JumpNeighborRepository($connection, $logger),
     new RiskRepository($connection),
     new JumpRangeCalculator(__DIR__ . '/../config/ships.php', __DIR__ . '/../config/jump_ranges.php'),
     new JumpFatigueModel(),
     new ShipRules(),
-    new Logger()
+    new SystemLookup($systemsRepo),
+    $logger
 );
 
 $baseOptions = [

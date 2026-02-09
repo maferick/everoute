@@ -16,6 +16,7 @@ use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\NavigationEngine;
 use Everoute\Routing\RouteService;
 use Everoute\Routing\ShipRules;
+use Everoute\Routing\SystemLookup;
 use Everoute\Security\Csrf;
 use Everoute\Security\Logger;
 use Everoute\Security\RateLimiter;
@@ -52,7 +53,8 @@ $routeCacheTtl = Env::int('ROUTE_CACHE_TTL_SECONDS', 600);
 $systems = new SystemRepository($connection);
 $stargates = new StargateRepository($connection);
 $riskRepo = new RiskRepository($connection, $riskCache, $riskCacheTtl, $heatmapTtl);
-$jumpNeighbors = new JumpNeighborRepository($connection);
+$jumpNeighbors = new JumpNeighborRepository($connection, $logger);
+$systemLookup = new SystemLookup($systems);
 $engine = new NavigationEngine(
     $systems,
     $stargates,
@@ -61,6 +63,7 @@ $engine = new NavigationEngine(
     new JumpRangeCalculator(__DIR__ . '/../config/ships.php', __DIR__ . '/../config/jump_ranges.php'),
     new JumpFatigueModel(),
     new ShipRules(),
+    $systemLookup,
     $logger
 );
 $routeService = new RouteService(
