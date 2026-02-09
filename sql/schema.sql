@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS jump_neighbors (
     range_ly SMALLINT UNSIGNED NOT NULL,
     neighbor_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
     neighbor_ids_blob MEDIUMBLOB NOT NULL,
+    encoding_version TINYINT NOT NULL DEFAULT 1,
     updated_at DATETIME NOT NULL,
     PRIMARY KEY (system_id, range_ly),
     INDEX idx_jump_neighbors_range (range_ly),

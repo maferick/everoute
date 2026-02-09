@@ -6,26 +6,32 @@ namespace Everoute\Universe;
 
 final class JumpNeighborCodec
 {
-    /** @param int[] $neighborIds */
-    public static function encodeNeighborIds(array $neighborIds): string
+    /** @param int[] $ids */
+    public static function encodeV1(array $ids): string
     {
-        if ($neighborIds === []) {
+        if ($ids === []) {
             return '';
         }
-        $packed = pack('N*', ...array_map('intval', $neighborIds));
-        $compressed = gzcompress($packed);
-        return is_string($compressed) ? $compressed : $packed;
+        $ids = array_map('intval', $ids);
+        sort($ids);
+        return pack('V*', ...$ids);
     }
 
     /** @return int[] */
-    public static function decodeNeighborIds(string $payload): array
+    public static function decodeV1(string $blob, int $expectedCount): array
     {
-        if ($payload === '') {
+        $expectedLength = $expectedCount * 4;
+        if (strlen($blob) !== $expectedLength) {
+            throw new \RuntimeException(sprintf(
+                'Neighbor ids blob length mismatch (len=%d expected=%d).',
+                strlen($blob),
+                $expectedLength
+            ));
+        }
+        if ($expectedLength === 0) {
             return [];
         }
-        $decompressed = @gzuncompress($payload);
-        $binary = $decompressed !== false ? $decompressed : $payload;
-        $unpacked = @unpack('N*', $binary);
+        $unpacked = unpack('V*', $blob);
         if (!is_array($unpacked)) {
             return [];
         }

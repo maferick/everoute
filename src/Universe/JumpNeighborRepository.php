@@ -22,16 +22,17 @@ final class JumpNeighborRepository
     {
         $pdo = $this->connection->pdo();
         $stmt = $pdo->prepare(sprintf(
-            'SELECT system_id, range_ly, neighbor_count, neighbor_ids_blob FROM jump_neighbors WHERE range_ly = :range_ly'
+            'SELECT system_id, range_ly, neighbor_count, neighbor_ids_blob, encoding_version FROM jump_neighbors WHERE range_ly = :range_ly'
         ));
         $stmt->execute(['range_ly' => $rangeBucket]);
         $neighbors = [];
         while ($row = $stmt->fetch()) {
-            $neighborCount = (int) ($row['neighbor_count'] ?? 0);
-            $payload = $row['neighbor_ids_blob'] ?? null;
-            $decoded = is_string($payload) ? JumpNeighborCodec::decodeNeighborIds($payload) : [];
             $systemId = (int) $row['system_id'];
             $rangeLy = (int) ($row['range_ly'] ?? $rangeBucket);
+            $neighborCount = (int) ($row['neighbor_count'] ?? 0);
+            $payload = $row['neighbor_ids_blob'] ?? null;
+            $encodingVersion = (int) ($row['encoding_version'] ?? 1);
+            $decoded = $this->decodeNeighborIds($systemId, $rangeLy, $neighborCount, $payload, $encodingVersion);
             $this->assertNeighborCount($systemId, $rangeLy, $neighborCount, $decoded);
             $neighbors[$systemId] = $decoded;
         }
@@ -48,17 +49,18 @@ final class JumpNeighborRepository
     {
         $pdo = $this->connection->pdo();
         $stmt = $pdo->prepare(sprintf(
-            'SELECT system_id, range_ly, neighbor_count, neighbor_ids_blob FROM jump_neighbors WHERE system_id = :system_id AND range_ly = :range_ly'
+            'SELECT system_id, range_ly, neighbor_count, neighbor_ids_blob, encoding_version FROM jump_neighbors WHERE system_id = :system_id AND range_ly = :range_ly'
         ));
         $stmt->execute(['system_id' => $systemId, 'range_ly' => $rangeBucket]);
         $row = $stmt->fetch(\PDO::FETCH_ASSOC);
         if (!$row) {
             return null;
         }
+        $rangeLy = (int) ($row['range_ly'] ?? $rangeBucket);
         $neighborCount = (int) ($row['neighbor_count'] ?? 0);
         $payload = $row['neighbor_ids_blob'] ?? null;
-        $decoded = is_string($payload) ? JumpNeighborCodec::decodeNeighborIds($payload) : [];
-        $rangeLy = (int) ($row['range_ly'] ?? $rangeBucket);
+        $encodingVersion = (int) ($row['encoding_version'] ?? 1);
+        $decoded = $this->decodeNeighborIds($systemId, $rangeLy, $neighborCount, $payload, $encodingVersion);
         $this->assertNeighborCount($systemId, $rangeLy, $neighborCount, $decoded);
         return [
             'neighbor_count' => $neighborCount,
@@ -87,6 +89,47 @@ final class JumpNeighborRepository
                 $neighborCount,
                 $decodedCount
             ));
+        }
+    }
+
+    /** @return int[] */
+    private function decodeNeighborIds(
+        int $systemId,
+        int $rangeLy,
+        int $neighborCount,
+        mixed $payload,
+        int $encodingVersion
+    ): array {
+        if (!is_string($payload)) {
+            $this->logger->error('Jump neighbor ids payload missing', [
+                'system_id' => $systemId,
+                'range_ly' => $rangeLy,
+                'neighbor_count' => $neighborCount,
+                'encoding_version' => $encodingVersion,
+            ]);
+            if ($this->debugMode) {
+                throw new \RuntimeException('Jump neighbor ids payload missing.');
+            }
+            return [];
+        }
+
+        try {
+            return match ($encodingVersion) {
+                1 => JumpNeighborCodec::decodeV1($payload, $neighborCount),
+                default => throw new \RuntimeException(sprintf('Unsupported jump neighbor encoding version %d.', $encodingVersion)),
+            };
+        } catch (\RuntimeException $exception) {
+            $this->logger->error('Jump neighbor decode failure', [
+                'system_id' => $systemId,
+                'range_ly' => $rangeLy,
+                'neighbor_count' => $neighborCount,
+                'encoding_version' => $encodingVersion,
+                'error' => $exception->getMessage(),
+            ]);
+            if ($this->debugMode) {
+                throw $exception;
+            }
+            return [];
         }
     }
 }

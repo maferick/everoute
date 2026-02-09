@@ -115,7 +115,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
                 }
                 $prevCount = $count;
 
-                $payload = JumpNeighborCodec::encodeNeighborIds($neighborIds);
+                $payload = JumpNeighborCodec::encodeV1($neighborIds);
                 $payloadBytes = strlen($payload);
                 $totalStoredBytes += $payloadBytes;
                 if ($storageWarningBytes > 0 && $totalStoredBytes >= $storageWarningBytes) {
@@ -132,6 +132,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
                 $updateClauses = [
                     'neighbor_count = VALUES(neighbor_count)',
                     'neighbor_ids_blob = VALUES(neighbor_ids_blob)',
+                    'encoding_version = VALUES(encoding_version)',
                     'updated_at = VALUES(updated_at)',
                 ];
 
@@ -141,8 +142,8 @@ final class PrecomputeJumpNeighborsCommand extends Command
                     $updateClauses[] = sprintf('%s = VALUES(%s)', $rangeBucketColumn, $rangeBucketColumn);
                 }
 
-                $insertColumns = array_merge($insertColumns, ['neighbor_count', 'neighbor_ids_blob', 'updated_at']);
-                $insertValues = array_merge($insertValues, [':neighbor_count', ':payload', 'NOW()']);
+                $insertColumns = array_merge($insertColumns, ['neighbor_count', 'neighbor_ids_blob', 'encoding_version', 'updated_at']);
+                $insertValues = array_merge($insertValues, [':neighbor_count', ':payload', ':encoding_version', 'NOW()']);
 
                 $stmt = $pdo->prepare(sprintf(
                     'INSERT INTO jump_neighbors (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s',
@@ -155,6 +156,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
                     'range_ly' => $rangeLy,
                     'neighbor_count' => $count,
                     'payload' => $payload,
+                    'encoding_version' => 1,
                 ];
                 if ($rangeBucketColumn !== null) {
                     $params['range_bucket'] = $rangeLy;

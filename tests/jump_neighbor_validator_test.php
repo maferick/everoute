@@ -21,19 +21,19 @@ if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
 $connection = new Connection('sqlite::memory:', '', '');
 $pdo = $connection->pdo();
 $pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT)');
-$pdo->exec('CREATE TABLE jump_neighbors (system_id INTEGER, range_ly INTEGER, neighbor_count INTEGER, neighbor_ids_blob BLOB, updated_at TEXT)');
+$pdo->exec('CREATE TABLE jump_neighbors (system_id INTEGER, range_ly INTEGER, neighbor_count INTEGER, neighbor_ids_blob BLOB, encoding_version INTEGER, updated_at TEXT)');
 
 $stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?)');
 $stmt->execute([1, 'Alpha']);
 $stmt->execute([2, 'Beta']);
 
-$insert = $pdo->prepare('INSERT INTO jump_neighbors VALUES (?, ?, ?, ?, ?)');
-$insert->execute([1, 1, 2, '', gmdate('c')]);
-$insert->execute([1, 2, 3, '', gmdate('c')]);
-$insert->execute([1, 3, 5, '', gmdate('c')]);
-$insert->execute([2, 1, 1, '', gmdate('c')]);
-$insert->execute([2, 2, 1, '', gmdate('c')]);
-$insert->execute([2, 3, 2, '', gmdate('c')]);
+$insert = $pdo->prepare('INSERT INTO jump_neighbors VALUES (?, ?, ?, ?, ?, ?)');
+$insert->execute([1, 1, 2, '', 1, gmdate('c')]);
+$insert->execute([1, 2, 3, '', 1, gmdate('c')]);
+$insert->execute([1, 3, 5, '', 1, gmdate('c')]);
+$insert->execute([2, 1, 1, '', 1, gmdate('c')]);
+$insert->execute([2, 2, 1, '', 1, gmdate('c')]);
+$insert->execute([2, 3, 2, '', 1, gmdate('c')]);
 
 $validator = new JumpNeighborValidator($connection);
 $result = $validator->validateMonotonicity([1, 2, 3]);
