@@ -22,14 +22,45 @@ final class JumpFatigueModel
      */
     public function evaluate(array $segments, array $options = []): array
     {
+        $detail = $this->evaluateWithWaits($segments, $options);
+
+        return [
+            'cooldowns_minutes' => $detail['cooldowns_minutes'],
+            'cooldown_total_minutes' => $detail['cooldown_total_minutes'],
+            'fatigue_minutes' => $detail['fatigue_minutes'],
+            'fatigue_risk_label' => $detail['fatigue_risk_label'],
+            'caps' => $detail['caps'],
+        ];
+    }
+
+    /**
+     * @param array<int, array{distance_ly: float|int, bridge_chain_type?: string}> $segments
+     * @param array{ship_class?: string, jump_ship_type?: string, bridge_chain_type?: string} $options
+     * @return array{
+     *   cooldowns_minutes: array<int, float>,
+     *   cooldown_total_minutes: float,
+     *   fatigue_minutes: float,
+     *   fatigue_risk_label: string,
+     *   caps: array{max_fatigue_minutes: float, max_cooldown_minutes: float},
+     *   fatigue_after_hop_minutes: array<int, float>,
+     *   waits_minutes: array<int, float>,
+     *   total_wait_minutes: float
+     * }
+     */
+    public function evaluateWithWaits(array $segments, array $options = []): array
+    {
         $fatigue = 0.0;
         $cooldowns = [];
         $cooldownTotal = 0.0;
+        $fatigueAfter = [];
+        $waits = [];
+        $totalWait = 0.0;
         $shipClass = (string) ($options['ship_class'] ?? '');
         $jumpShipType = (string) ($options['jump_ship_type'] ?? '');
         $defaultBridgeChain = (string) ($options['bridge_chain_type'] ?? '');
+        $lastIndex = count($segments) - 1;
 
-        foreach ($segments as $segment) {
+        foreach ($segments as $index => $segment) {
             $distanceLy = max(0.0, (float) ($segment['distance_ly'] ?? 0.0));
             $bridgeChain = (string) ($segment['bridge_chain_type'] ?? $defaultBridgeChain);
             $effectiveLy = $distanceLy * JumpShipType::fatigueDistanceMultiplier($shipClass, $jumpShipType, $bridgeChain);
@@ -44,6 +75,11 @@ final class JumpFatigueModel
             $cooldowns[] = round($cooldown, 2);
             $cooldownTotal += $cooldown;
             $fatigue = max(0.0, $fatigue - $cooldown);
+            $fatigueAfter[] = round($fatigue, 2);
+
+            $wait = $index < $lastIndex ? $cooldown : 0.0;
+            $waits[] = round($wait, 2);
+            $totalWait += $wait;
         }
 
         $risk = 'low';
@@ -62,6 +98,9 @@ final class JumpFatigueModel
                 'max_fatigue_minutes' => self::MAX_FATIGUE_MIN,
                 'max_cooldown_minutes' => self::MAX_COOLDOWN_MIN,
             ],
+            'fatigue_after_hop_minutes' => $fatigueAfter,
+            'waits_minutes' => $waits,
+            'total_wait_minutes' => round($totalWait, 2),
         ];
     }
 }

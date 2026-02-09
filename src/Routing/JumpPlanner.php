@@ -260,11 +260,24 @@ final class JumpPlanner
             ];
         }
 
-        $fatigue = $this->fatigueModel->evaluate($segments, $options);
+        $fatigue = $this->fatigueModel->evaluateWithWaits($segments, $options);
         $cooldownMinutes = $fatigue['cooldown_total_minutes'];
+        $jumpWaits = $fatigue['waits_minutes'];
+        $totalWaitMinutes = $fatigue['total_wait_minutes'];
+        $waitSystems = [];
+        foreach ($segments as $index => $segment) {
+            $wait = $jumpWaits[$index] ?? 0.0;
+            if ($wait <= 0.0) {
+                continue;
+            }
+            $waitSystems[] = [
+                'id' => $segment['to_id'],
+                'name' => $segment['to'],
+            ];
+        }
         $jumpTime = count($segments) * self::BASE_JUMP_TIME_S;
         $dockTime = count($midpoints) * self::DOCK_OVERHEAD_S;
-        $estimatedTime = $jumpTime + ($cooldownMinutes * 60) + $dockTime;
+        $estimatedTime = $jumpTime + ($totalWaitMinutes * 60) + $dockTime;
 
         [$riskScore, $exposureScore] = $this->summarizeJumpRisk($segments, $systems, $risk, $options, $npcStationIds);
         $totalLy = 0.0;
@@ -292,6 +305,9 @@ final class JumpPlanner
             'jump_segments' => $segments,
             'jump_cooldown_per_jump_minutes' => $fatigue['cooldowns_minutes'],
             'jump_fatigue_caps' => $fatigue['caps'],
+            'jump_waits' => $jumpWaits,
+            'total_wait_minutes' => $totalWaitMinutes,
+            'wait_systems' => $waitSystems,
             'risk_score' => $riskScore,
             'exposure_score' => $exposureScore,
             'debug' => $debugEnabled ? ($planResult['debug'] ?? null) : null,

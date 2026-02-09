@@ -435,6 +435,7 @@ final class NavigationEngine
         $summary['nodes_explored'] = $result['nodes_explored'];
         $summary['illegal_systems_filtered'] = $graph['filtered'];
         $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($segments), $options);
+        $summary += $this->buildJumpWaitDetails($segments, $options);
         $summary['debug'] = $originDiagnostics;
         return $summary;
     }
@@ -616,7 +617,8 @@ final class NavigationEngine
                 $segments = array_merge($launchSegments, $jumpSegments, $landingSegments);
 
                 $totalGateHops = $launch['gate_hops'] + $landing['gate_hops'];
-                $totalCost = round($result['distance'] + $totalGateHops, 2);
+                $waitDetails = $this->buildJumpWaitDetails($jumpSegments, $options);
+                $totalCost = round($result['distance'] + $totalGateHops + $waitDetails['total_wait_minutes'], 2);
                 if ($totalCost >= $bestCost) {
                     continue;
                 }
@@ -625,6 +627,7 @@ final class NavigationEngine
                 $summary['nodes_explored'] = $nodesExplored;
                 $summary['illegal_systems_filtered'] = 0;
                 $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($jumpSegments), $options);
+                $summary += $waitDetails;
                 $summary['launch_system'] = $this->systemSummary($launchId);
                 $summary['landing_system'] = $this->systemSummary($landingId);
                 $summary['launch_gate_hops'] = $launch['gate_hops'];
@@ -1875,6 +1878,41 @@ final class NavigationEngine
             $jumpSegments[] = ['distance_ly' => (float) ($segment['distance_ly'] ?? 0.0)];
         }
         return $jumpSegments;
+    }
+
+    private function buildJumpWaitDetails(array $jumpSegments, array $options): array
+    {
+        if ($jumpSegments === []) {
+            return [
+                'jump_waits' => [],
+                'total_wait_minutes' => 0.0,
+                'wait_systems' => [],
+            ];
+        }
+
+        $fatigue = $this->fatigueModel->evaluateWithWaits($this->jumpSegments($jumpSegments), $options);
+        $waits = $fatigue['waits_minutes'];
+        $waitSystems = [];
+        foreach ($jumpSegments as $index => $segment) {
+            $wait = $waits[$index] ?? 0.0;
+            if ($wait <= 0.0) {
+                continue;
+            }
+            $toId = (int) ($segment['to_id'] ?? 0);
+            if ($toId <= 0) {
+                continue;
+            }
+            $waitSystems[] = [
+                'id' => $toId,
+                'name' => (string) ($segment['to'] ?? $toId),
+            ];
+        }
+
+        return [
+            'jump_waits' => $waits,
+            'total_wait_minutes' => $fatigue['total_wait_minutes'],
+            'wait_systems' => $waitSystems,
+        ];
     }
 
     private function selectBest(array $gate, array $jump, array $hybrid): string
