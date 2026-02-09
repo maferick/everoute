@@ -6,6 +6,7 @@ namespace Everoute\Routing;
 
 use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
+use Everoute\Risk\RiskScorer;
 use Everoute\Security\Logger;
 use Everoute\Universe\JumpNeighborRepository;
 use Everoute\Universe\StargateRepository;
@@ -19,6 +20,7 @@ final class NavigationEngine
     private array $risk = [];
     /** @var array<int, int[]> */
     private array $gateNeighbors = [];
+    private RiskScorer $riskScorer;
 
     public function __construct(
         private SystemRepository $systemsRepo,
@@ -31,6 +33,7 @@ final class NavigationEngine
         private SystemLookup $systemLookup,
         private Logger $logger
     ) {
+        $this->riskScorer = new RiskScorer();
         $this->loadData();
     }
 
@@ -1173,7 +1176,7 @@ final class NavigationEngine
     private function riskScore(int $systemId): float
     {
         $risk = $this->risk[$systemId] ?? [];
-        return (float) (($risk['kills_last_24h'] ?? 0) + ($risk['pod_kills_last_24h'] ?? 0));
+        return $this->riskScorer->penalty($risk);
     }
 
     private function riskWeight(array $options): float

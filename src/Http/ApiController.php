@@ -25,7 +25,8 @@ final class ApiController
 
     public function health(Request $request): Response
     {
-        $riskUpdated = $this->risk->getLatestUpdate();
+        $provider = Env::get('RISK_PROVIDER', 'esi_system_kills');
+        $riskUpdated = $this->risk->getLatestUpdate($provider);
         $ingestLastSeen = $this->risk->getIngestLastSeen();
         $ingestRunning = null;
         if ($ingestLastSeen !== null) {
@@ -40,7 +41,7 @@ final class ApiController
         return new JsonResponse([
             'status' => 'ok',
             'time' => gmdate('c'),
-            'risk_provider' => Env::get('RISK_PROVIDER', 'manual'),
+            'risk_provider' => $provider,
             'risk_updated_at' => $riskUpdated,
             'risk_ingest_last_seen' => $ingestLastSeen,
             'risk_ingest_running' => $ingestRunning,
@@ -105,6 +106,7 @@ final class ApiController
             return new JsonResponse($result, $status);
         }
 
+        $result['risk_updated_at'] = $this->risk->getLatestUpdate(Env::get('RISK_PROVIDER', 'esi_system_kills'));
         return new JsonResponse($result);
     }
 

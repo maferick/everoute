@@ -8,6 +8,7 @@ use DateTimeImmutable;
 use Everoute\Cache\RedisCache;
 use Everoute\Config\Env;
 use Everoute\DB\Connection;
+use Everoute\Risk\RiskRepository;
 use Everoute\Routing\GraphStore;
 use Everoute\Security\Logger;
 use Everoute\Universe\StargateRepository;
@@ -61,9 +62,9 @@ final class DoctorCommand extends Command
 
         $systems = (int) $pdo->query('SELECT COUNT(*) FROM systems')->fetchColumn();
         $chokepoints = (int) $pdo->query('SELECT COUNT(*) FROM chokepoints')->fetchColumn();
-        $riskUpdated = $pdo->query('SELECT MAX(last_updated_at) FROM system_risk')->fetchColumn();
-
         $connection = new Connection($dsn, (string) $input->getOption('db-user'), $dbPass);
+        $riskRepo = new RiskRepository($connection);
+        $riskUpdated = $riskRepo->getLatestUpdate(Env::get('RISK_PROVIDER', 'esi_system_kills'));
         $graphStatus = 'not_loaded';
         try {
             GraphStore::load(new SystemRepository($connection), new StargateRepository($connection), new Logger());

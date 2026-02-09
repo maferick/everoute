@@ -11,6 +11,7 @@
 
 ## Updating Risk Data
 - Schedule `php bin/console import:risk` via cron for static or manual inputs.
+- Default: schedule `php bin/console risk:refresh --provider=esi_system_kills` every 5 minutes for CCP ESI system kills data.
 - Optional: schedule `php bin/console risk:fetch` for live zKillboard snapshots (rate limit responsibly).
 - For live killfeed aggregation, run `php bin/console risk:ingest` continuously with `RISK_PROVIDER=zkillredisq`.
 - Prune old kill events daily with `php bin/console risk:prune` (retention is `RISK_EVENT_RETENTION_HOURS`).
@@ -19,10 +20,16 @@
 Use a unique queue ID per environment (e.g. `routing_lonewolves_prod`). RedisQ enforces one request at a time per queue ID and ~2 req/sec per IP. The ingest loop respects `RISK_ZKILL_TTW` (1-10) and backs off on 429s.
 
 Supported `RISK_PROVIDER` values:
+- `esi_system_kills` (CCP ESI system kills, last hour)
 - `manual` (imported or static data)
 - `zkillredisq` (live RedisQ ingestion)
 - `zkillws` (stub for future websocket ingestion)
 - `everef` (stub for dataset backfills)
+
+Recommended cron for CCP ESI refresh:
+```cron
+*/5 * * * * www-data cd /var/www/everoute && php bin/console risk:refresh --provider=esi_system_kills >> /var/log/everoute/risk_refresh.log 2>&1
+```
 
 Example systemd unit:
 ```ini
