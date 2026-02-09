@@ -112,6 +112,7 @@ try {
             'avoid_nullsec' => !empty($_POST['avoid_nullsec']),
             'avoid_specific_systems' => $_POST['avoid_specific_systems'] ?? '',
             'prefer_npc_stations' => !empty($_POST['prefer_npc_stations']),
+            'debug' => !empty($_POST['debug']),
         ];
         $apiRequest = new Request('POST', '/api/v1/route', [], $payload, [], $request->ip, $request->requestId);
         $handler->setRequest($apiRequest);
