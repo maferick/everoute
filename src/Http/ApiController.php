@@ -6,6 +6,7 @@ namespace Everoute\Http;
 
 use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
+use Everoute\Routing\JumpShipType;
 use Everoute\Routing\RouteService;
 use Everoute\Security\RateLimiter;
 use Everoute\Security\Validator;
@@ -73,14 +74,10 @@ final class ApiController
 
         $safety = $this->validator->int($body['safety_vs_speed'] ?? null, 0, 100, $mode === 'capital' ? 70 : 50);
 
-        $jumpShipType = $this->validator->enum((string) ($body['jump_ship_type'] ?? ''), [
-            'carrier',
-            'dread',
-            'fax',
-            'jump_freighter',
-            'supercarrier',
-            'titan',
-        ], $shipClass === 'jump_freighter' ? 'jump_freighter' : 'carrier');
+        $jumpShipType = $this->validator->string($body['jump_ship_type'] ?? null);
+        if ($jumpShipType === null || $jumpShipType === '') {
+            $jumpShipType = $shipClass === 'jump_freighter' ? JumpShipType::JUMP_FREIGHTER : JumpShipType::CARRIER;
+        }
         $jumpSkillLevel = $this->validator->int($body['jump_skill_level'] ?? null, 0, 5, 4);
 
         $options = [

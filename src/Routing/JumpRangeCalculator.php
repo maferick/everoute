@@ -20,7 +20,7 @@ final class JumpRangeCalculator
 
     public function effectiveRange(string $shipType, int $skillLevel): ?float
     {
-        $shipType = strtolower($shipType);
+        $shipType = JumpShipType::normalizeJumpShipType($shipType);
         $ship = $this->shipsConfig['ships'][$shipType] ?? null;
         if (!is_array($ship)) {
             return null;

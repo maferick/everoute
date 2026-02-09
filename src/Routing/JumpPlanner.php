@@ -103,15 +103,47 @@ final class JumpPlanner
         array $npcStationIds,
         array $gatePath
     ): array {
-        $shipType = (string) ($options['jump_ship_type'] ?? '');
+        $rawShipType = (string) ($options['jump_ship_type'] ?? '');
+        $shipType = JumpShipType::normalizeJumpShipType($rawShipType);
+        if (!JumpShipType::isAllowed($shipType)) {
+            $message = sprintf(
+                "Unsupported jump ship type '%s' (normalized '%s'). Allowed: %s",
+                $rawShipType,
+                $shipType,
+                JumpShipType::allowedList()
+            );
+            $this->logger->error('Unsupported jump ship type', [
+                'jump_ship_type' => $rawShipType,
+                'normalized_jump_ship_type' => $shipType,
+            ]);
+            return [
+                'feasible' => false,
+                'error' => 'jump-assisted plan not feasible for current ship/skills',
+                'reason' => $message,
+                'effective_jump_range_ly' => null,
+                'jump_cooldown_total_minutes' => null,
+                'jump_fatigue_risk_label' => 'not_applicable',
+            ];
+        }
+        $options['jump_ship_type'] = $shipType;
         $skillLevel = (int) ($options['jump_skill_level'] ?? 0);
         $effectiveRange = $this->rangeCalculator->effectiveRange($shipType, $skillLevel);
 
         if ($effectiveRange === null) {
+            $message = sprintf(
+                "Unsupported jump ship type '%s' (normalized '%s'). Allowed: %s",
+                $rawShipType,
+                $shipType,
+                JumpShipType::allowedList()
+            );
+            $this->logger->error('Unsupported jump ship type', [
+                'jump_ship_type' => $rawShipType,
+                'normalized_jump_ship_type' => $shipType,
+            ]);
             return [
                 'feasible' => false,
                 'error' => 'jump-assisted plan not feasible for current ship/skills',
-                'reason' => 'Unknown jump ship type for range calculation.',
+                'reason' => $message,
                 'effective_jump_range_ly' => null,
                 'jump_cooldown_total_minutes' => null,
                 'jump_fatigue_risk_label' => 'not_applicable',
