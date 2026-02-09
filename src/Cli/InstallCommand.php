@@ -23,7 +23,7 @@ final class InstallCommand extends Command
             ->setName('install')
             ->setDescription('Install Everoute database and user')
             ->addOption('schema-only', null, InputOption::VALUE_NONE, 'Apply schema and seed only')
-            ->addOption('reset', null, InputOption::VALUE_NONE, 'Drop and recreate the database before applying schema')
+            ->addOption('reset', null, InputOption::VALUE_NONE, 'Drop existing tables before applying schema')
             ->addOption('db-host', null, InputOption::VALUE_REQUIRED, 'DB host', Env::get('DB_HOST', '127.0.0.1'))
             ->addOption('db-port', null, InputOption::VALUE_REQUIRED, 'DB port', (string) Env::int('DB_PORT', 3306))
             ->addOption('db-name', null, InputOption::VALUE_REQUIRED, 'DB name', Env::get('DB_NAME', 'everoute'))
@@ -58,32 +58,26 @@ final class InstallCommand extends Command
         if ($appPass === '') {
             $appPass = bin2hex(random_bytes(8));
         }
-
-        if (!$schemaOnly || $reset) {
+        if (!$schemaOnly && !$reset) {
             $adminDsn = sprintf('mysql:host=%s;port=%d;charset=utf8mb4', $dbHost, $dbPort);
             $adminPdo = new PDO($adminDsn, $appUser, $appPass, [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             ]);
 
             $dbNameSafe = str_replace('`', '``', $dbName);
-            $appUserSafe = str_replace('`', '``', $appUser);
-            $appPassSafe = $adminPdo->quote($appPass);
-            if ($reset) {
-                $adminPdo->exec("DROP DATABASE IF EXISTS `{$dbNameSafe}`");
-                $output->writeln('<info>Dropped existing database.</info>');
-            }
             $adminPdo->exec("CREATE DATABASE IF NOT EXISTS `{$dbNameSafe}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-            $adminPdo->exec("CREATE USER IF NOT EXISTS `{$appUserSafe}`@'%' IDENTIFIED BY {$appPassSafe}");
-
-            $grants = str_replace(['{{db_name}}', '{{app_user}}'], [$dbNameSafe, $appUserSafe], $this->loadSql('sql/grants.sql'));
-            $adminPdo->exec($grants);
-            $output->writeln('<info>Database and user created.</info>');
+            $output->writeln('<info>Database ensured.</info>');
         }
 
         $dsn = sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $dbHost, $dbPort, $dbName);
         $pdo = new PDO($dsn, $appUser, $appPass, [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         ]);
+
+        if ($reset) {
+            $this->dropAllTables($pdo, $dbName);
+            $output->writeln('<info>Dropped existing tables.</info>');
+        }
 
         $pdo->exec($this->loadSql('sql/schema.sql'));
         $pdo->exec($this->loadSql('sql/seed.sql'));
@@ -123,5 +117,22 @@ final class InstallCommand extends Command
     private function loadSql(string $path): string
     {
         return (string) file_get_contents(dirname(__DIR__, 2) . '/' . $path);
+    }
+
+    private function dropAllTables(PDO $pdo, string $dbName): void
+    {
+        $stmt = $pdo->prepare('SELECT table_name FROM information_schema.tables WHERE table_schema = :db');
+        $stmt->execute(['db' => $dbName]);
+        $tables = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        if ($tables === []) {
+            return;
+        }
+
+        $pdo->exec('SET FOREIGN_KEY_CHECKS=0');
+        foreach ($tables as $table) {
+            $tableSafe = str_replace('`', '``', (string) $table);
+            $pdo->exec("DROP TABLE IF EXISTS `{$tableSafe}`");
+        }
+        $pdo->exec('SET FOREIGN_KEY_CHECKS=1');
     }
 }
