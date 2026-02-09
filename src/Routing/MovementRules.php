@@ -12,7 +12,7 @@ final class MovementRules
     public function isCapitalRestricted(array $options): bool
     {
         $shipClass = (string) ($options['ship_class'] ?? '');
-        $jumpShipType = (string) ($options['jump_ship_type'] ?? '');
+        $jumpShipType = JumpShipType::normalizeJumpShipType((string) ($options['jump_ship_type'] ?? ''));
 
         if (in_array($shipClass, ['capital', 'super', 'titan'], true)) {
             return true;
@@ -22,7 +22,7 @@ final class MovementRules
             return false;
         }
 
-        return in_array($jumpShipType, ['carrier', 'dread', 'fax', 'super', 'supercarrier', 'titan'], true);
+        return in_array($jumpShipType, JumpShipType::CAPITALS, true);
     }
 
     public function isHighSec(array $system): bool
@@ -72,8 +72,8 @@ final class MovementRules
 
     public function isSystemAllowedForShip(array $system, string $shipType): bool
     {
-        $shipType = strtolower($shipType);
-        if (in_array($shipType, ['carrier', 'dread', 'fax', 'super', 'supercarrier', 'titan'], true)) {
+        $shipType = JumpShipType::normalizeJumpShipType($shipType);
+        if (in_array($shipType, JumpShipType::CAPITALS, true)) {
             return $this->getSystemSpaceType($system) !== 'highsec';
         }
 

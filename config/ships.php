@@ -18,9 +18,6 @@ return [
         'super' => [
             'max_range_ly' => 7.0,
         ],
-        'supercarrier' => [
-            'max_range_ly' => 7.0,
-        ],
         'titan' => [
             'max_range_ly' => 7.0,
         ],
