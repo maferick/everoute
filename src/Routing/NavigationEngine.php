@@ -42,6 +42,12 @@ final class NavigationEngine
     private array $constellationPortals = [];
     /** @var array<int, array<int, int>> */
     private array $constellationDistances = [];
+    /** @var array<int, array<int, array<int, array{to_constellation_id:int,example_from_system_id:int,example_to_system_id:int,min_hop_ly:float}>>> */
+    private array $jumpConstellationEdgesByRange = [];
+    /** @var array<int, array<int, int[]>> */
+    private array $jumpConstellationPortalsByRange = [];
+    /** @var array<int, array<int, int[]>> */
+    private array $jumpMidpointsByRange = [];
     private RiskScorer $riskScorer;
 
     public function __construct(
@@ -436,7 +442,8 @@ final class NavigationEngine
             ];
         }
 
-        $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, $debugLogs);
+        $boundedCandidates = $this->boundedJumpCandidateSet($startId, $endId, $rangeBucket);
+        $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, $debugLogs, $boundedCandidates);
         if ($debugLogs && $graph['debug_sample'] !== []) {
             $this->logger->debug('Jump neighbor sample', [
                 'bucket' => $rangeBucket,
@@ -845,7 +852,8 @@ final class NavigationEngine
             ];
         }
 
-        $jumpNeighbors = $this->buildHybridJumpNeighbors($neighbors);
+        $boundedCandidates = $this->boundedJumpCandidateSet($startId, $endId, $rangeBucket);
+        $jumpNeighbors = $this->buildHybridJumpNeighbors($neighbors, $boundedCandidates);
         $this->riskWeightCache = $this->riskWeight($options);
         $dijkstra = new Dijkstra();
         $bestPlan = null;
@@ -1324,6 +1332,100 @@ final class NavigationEngine
         return $best;
     }
 
+    /** @return array<int, bool>|null */
+    private function boundedJumpCandidateSet(int $startId, int $endId, int $rangeBucket): ?array
+    {
+        $startConstellationId = (int) ($this->systems[$startId]['constellation_id'] ?? 0);
+        $endConstellationId = (int) ($this->systems[$endId]['constellation_id'] ?? 0);
+        if ($startConstellationId === 0 || $endConstellationId === 0) {
+            return null;
+        }
+        $edges = $this->jumpConstellationEdgesByRange[$rangeBucket] ?? [];
+        if ($edges === []) {
+            return null;
+        }
+
+        $constellationPath = $this->constellationPathForJumpRange($startConstellationId, $endConstellationId, $rangeBucket);
+        if ($constellationPath === []) {
+            return null;
+        }
+
+        $allowed = [
+            $startId => true,
+            $endId => true,
+        ];
+        $portalsByConstellation = $this->jumpConstellationPortalsByRange[$rangeBucket] ?? [];
+        $midpointsByConstellation = $this->jumpMidpointsByRange[$rangeBucket] ?? [];
+        foreach ($constellationPath as $constellationId) {
+            foreach (array_slice($portalsByConstellation[$constellationId] ?? [], 0, 10) as $systemId) {
+                $allowed[(int) $systemId] = true;
+            }
+            foreach (array_slice($midpointsByConstellation[$constellationId] ?? [], 0, 8) as $systemId) {
+                $allowed[(int) $systemId] = true;
+            }
+            foreach ($this->systems as $systemId => $system) {
+                if ((int) ($system['constellation_id'] ?? 0) !== (int) $constellationId) {
+                    continue;
+                }
+                $allowed[(int) $systemId] = true;
+            }
+        }
+
+        foreach (array_keys($allowed) as $systemId) {
+            foreach ($this->gateNeighbors[(int) $systemId] ?? [] as $neighborId) {
+                $allowed[(int) $neighborId] = true;
+            }
+        }
+
+        return $allowed;
+    }
+
+    /** @return int[] */
+    private function constellationPathForJumpRange(int $startConstellationId, int $endConstellationId, int $rangeBucket): array
+    {
+        if ($startConstellationId === $endConstellationId) {
+            return [$startConstellationId];
+        }
+        $edges = $this->jumpConstellationEdgesByRange[$rangeBucket] ?? [];
+        if ($edges === []) {
+            return [];
+        }
+
+        $queue = new \SplQueue();
+        $queue->enqueue($startConstellationId);
+        $seen = [$startConstellationId => true];
+        $prev = [];
+
+        while (!$queue->isEmpty()) {
+            $current = (int) $queue->dequeue();
+            if ($current === $endConstellationId) {
+                break;
+            }
+            foreach ($edges[$current] ?? [] as $edge) {
+                $next = (int) ($edge['to_constellation_id'] ?? 0);
+                if ($next === 0 || isset($seen[$next])) {
+                    continue;
+                }
+                $seen[$next] = true;
+                $prev[$next] = $current;
+                $queue->enqueue($next);
+            }
+        }
+
+        if (!isset($seen[$endConstellationId])) {
+            return [];
+        }
+
+        $path = [$endConstellationId];
+        $cursor = $endConstellationId;
+        while (isset($prev[$cursor])) {
+            $cursor = $prev[$cursor];
+            array_unshift($path, $cursor);
+        }
+
+        return $path;
+    }
+
     /** @return array<int, bool> */
     private function allowedConstellationSet(int $constellationId): array
     {
@@ -1343,7 +1445,8 @@ final class NavigationEngine
         int $endId,
         string $shipType,
         array $options,
-        bool $debugLogs
+        bool $debugLogs,
+        ?array $allowedSystems = null
     ): array
     {
         $neighbors = [];
@@ -1355,6 +1458,9 @@ final class NavigationEngine
             if (!isset($this->systems[$from])) {
                 continue;
             }
+            if ($allowedSystems !== null && !isset($allowedSystems[(int) $from])) {
+                continue;
+            }
             $fromIsMidpoint = $from !== $startId && $from !== $endId;
             if (!$this->isSystemAllowedForJumpChain($shipType, $this->systems[$from], $fromIsMidpoint, $options)) {
                 $filtered++;
@@ -1363,6 +1469,9 @@ final class NavigationEngine
             $filteredForNode = 0;
             foreach ($toList as $to) {
                 if (!isset($this->systems[$to])) {
+                    continue;
+                }
+                if ($allowedSystems !== null && !isset($allowedSystems[(int) $to])) {
                     continue;
                 }
                 $toIsMidpoint = $to !== $startId && $to !== $endId;
@@ -1712,7 +1821,7 @@ final class NavigationEngine
                 ]);
                 continue;
             }
-            $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, false);
+            $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, false, null);
             if (!isset($graph['neighbors'][$startId]) || !isset($graph['neighbors'][$endId])) {
                 $this->logger->debug('Jump diagnostic filtered endpoints', [
                     'bucket' => $bucket,
@@ -2173,15 +2282,21 @@ final class NavigationEngine
      * @param array<int, int[]> $precomputed
      * @return array<int, array<int, array<string, mixed>>>
      */
-    private function buildHybridJumpNeighbors(array $precomputed): array
+    private function buildHybridJumpNeighbors(array $precomputed, ?array $allowedSystems = null): array
     {
         $neighbors = [];
         foreach ($precomputed as $from => $toList) {
             if (!isset($this->systems[$from])) {
                 continue;
             }
+            if ($allowedSystems !== null && !isset($allowedSystems[(int) $from])) {
+                continue;
+            }
             foreach ($toList as $to) {
                 if (!isset($this->systems[$to])) {
+                    continue;
+                }
+                if ($allowedSystems !== null && !isset($allowedSystems[(int) $to])) {
                     continue;
                 }
                 $neighbors[$from][] = [
@@ -3156,10 +3271,21 @@ final class NavigationEngine
                 foreach (array_keys($this->constellationPortals) as $constellationId) {
                     $this->constellationDistances[(int) $constellationId] = $this->constellationGraphRepo->portalDistancesForConstellation((int) $constellationId);
                 }
+                $this->jumpConstellationEdgesByRange = [];
+                $this->jumpConstellationPortalsByRange = [];
+                $this->jumpMidpointsByRange = [];
+                for ($range = 1; $range <= 10; $range++) {
+                    $this->jumpConstellationEdgesByRange[$range] = $this->constellationGraphRepo->jumpEdgeMap($range);
+                    $this->jumpConstellationPortalsByRange[$range] = $this->constellationGraphRepo->jumpPortalsByConstellation($range);
+                    $this->jumpMidpointsByRange[$range] = $this->constellationGraphRepo->jumpMidpointsByConstellation($range);
+                }
             } catch (\Throwable) {
                 $this->constellationEdges = [];
                 $this->constellationPortals = [];
                 $this->constellationDistances = [];
+                $this->jumpConstellationEdgesByRange = [];
+                $this->jumpConstellationPortalsByRange = [];
+                $this->jumpMidpointsByRange = [];
             }
         }
     }

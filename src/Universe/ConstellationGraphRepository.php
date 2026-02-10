@@ -72,4 +72,69 @@ final class ConstellationGraphRepository
 
         return $map;
     }
+
+
+    /**
+     * @return array<int, array<int, array{to_constellation_id:int,example_from_system_id:int,example_to_system_id:int,min_hop_ly:float}>>
+     */
+    public function jumpEdgeMap(int $rangeLy): array
+    {
+        $stmt = $this->connection->pdo()->prepare(
+            'SELECT from_constellation_id, to_constellation_id, example_from_system_id, example_to_system_id, min_hop_ly
+             FROM jump_constellation_edges
+             WHERE range_ly = :range_ly'
+        );
+        $stmt->execute(['range_ly' => $rangeLy]);
+
+        $map = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $fromConstellationId = (int) $row['from_constellation_id'];
+            $map[$fromConstellationId][] = [
+                'to_constellation_id' => (int) $row['to_constellation_id'],
+                'example_from_system_id' => (int) $row['example_from_system_id'],
+                'example_to_system_id' => (int) $row['example_to_system_id'],
+                'min_hop_ly' => (float) $row['min_hop_ly'],
+            ];
+        }
+
+        return $map;
+    }
+
+    /** @return array<int, int[]> */
+    public function jumpPortalsByConstellation(int $rangeLy): array
+    {
+        $stmt = $this->connection->pdo()->prepare(
+            'SELECT constellation_id, system_id
+             FROM jump_constellation_portals
+             WHERE range_ly = :range_ly
+             ORDER BY constellation_id, outbound_constellations_count DESC, system_id'
+        );
+        $stmt->execute(['range_ly' => $rangeLy]);
+
+        $map = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $map[(int) $row['constellation_id']][] = (int) $row['system_id'];
+        }
+
+        return $map;
+    }
+
+    /** @return array<int, int[]> */
+    public function jumpMidpointsByConstellation(int $rangeLy): array
+    {
+        $stmt = $this->connection->pdo()->prepare(
+            'SELECT constellation_id, system_id
+             FROM jump_midpoint_candidates
+             WHERE range_ly = :range_ly
+             ORDER BY constellation_id, score DESC, system_id'
+        );
+        $stmt->execute(['range_ly' => $rangeLy]);
+
+        $map = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $map[(int) $row['constellation_id']][] = (int) $row['system_id'];
+        }
+
+        return $map;
+    }
 }
