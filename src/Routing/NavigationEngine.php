@@ -92,6 +92,11 @@ final class NavigationEngine
             $options
         );
 
+        $weights = $this->scoringWeights($options);
+        $gateRoute = $this->applyRouteScoring($gateRoute, $weights, $options);
+        $jumpRoute = $this->applyRouteScoring($jumpRoute, $weights, $options);
+        $hybridRoute = $this->applyRouteScoring($hybridRoute, $weights, $options);
+
         $best = $this->selectBest($gateRoute, $jumpRoute, $hybridRoute);
         $explanation = $this->buildExplanation($best, $gateRoute, $jumpRoute, $hybridRoute, $options);
         $payload = [
@@ -101,6 +106,7 @@ final class NavigationEngine
             'best' => $best,
             'explanation' => $explanation,
             'effective_range_ly' => $effectiveRange,
+            'scoring' => $weights,
         ];
 
         if ($debugEnabled) {
@@ -125,6 +131,7 @@ final class NavigationEngine
                     'jump' => $jumpRoute['illegal_systems_filtered'] ?? 0,
                     'hybrid' => $hybridRoute['illegal_systems_filtered'] ?? 0,
                 ],
+                'scoring' => $weights,
             ];
             if (isset($jumpRoute['debug']) && is_array($jumpRoute['debug'])) {
                 $payload['debug']['jump_origin'] = $jumpRoute['debug'];
@@ -1898,6 +1905,7 @@ final class NavigationEngine
         $npcStationRatio = $systemCount > 0 ? round($npcStationsInRoute / $systemCount, 3) : 0.0;
         return [
             'feasible' => true,
+            'legacy_total_cost' => round($distance, 2),
             'total_cost' => round($distance, 2),
             'total_gates' => $gateHops,
             'total_jump_ly' => round($totalJumpLy, 2),
@@ -2046,19 +2054,125 @@ final class NavigationEngine
         ];
     }
 
+    /** @return array{slider_scalar: float, w_time: float, w_risk: float, w_pref: float} */
+    private function scoringWeights(array $options): array
+    {
+        $safety = max(0, min(100, (int) ($options['safety_vs_speed'] ?? 50)));
+        $s = $safety / 100.0;
+
+        return [
+            'slider_scalar' => round($s, 4),
+            'w_time' => round(1.2 - (0.7 * $s), 4),
+            'w_risk' => round(0.2 + (1.2 * $s), 4),
+            'w_pref' => round(0.15 + (0.1 * $s), 4),
+        ];
+    }
+
+    private function applyRouteScoring(array $route, array $weights, array $options): array
+    {
+        $route['time_cost'] = $this->routeTimeCost($route);
+        $route['risk_cost'] = $this->routeRiskCost($route);
+        $route['preference_cost'] = $this->routePreferenceCost($route, $options);
+
+        if (empty($route['feasible'])) {
+            $route['total_cost'] = INF;
+            return $route;
+        }
+
+        $weightedTotal = ($route['time_cost'] * (float) $weights['w_time'])
+            + ($route['risk_cost'] * (float) $weights['w_risk'])
+            + ($route['preference_cost'] * (float) $weights['w_pref']);
+        $route['total_cost'] = round($weightedTotal, 4);
+
+        return $route;
+    }
+
+    private function routeTimeCost(array $route): float
+    {
+        $gates = max(0, (int) ($route['total_gates'] ?? 0));
+        $jumpLy = max(0.0, (float) ($route['total_jump_ly'] ?? 0.0));
+        $travelTime = $gates + $jumpLy;
+
+        return round(min(1.0, $travelTime / 50.0), 4);
+    }
+
+    private function routeRiskCost(array $route): float
+    {
+        $systems = $route['systems'] ?? [];
+        if (!is_array($systems) || $systems === []) {
+            return 1.0;
+        }
+
+        return round(min(1.0, $this->routeSecurityPenalty($systems) / 100.0), 4);
+    }
+
+    private function routePreferenceCost(array $route, array $options): float
+    {
+        if (empty($options['prefer_npc'])) {
+            return 0.0;
+        }
+
+        $ratio = (float) ($route['npc_station_ratio'] ?? 0.0);
+        return round(max(0.0, 1.0 - $ratio), 4);
+    }
+
+    /**
+     * @param array<string, array<string, mixed>> $feasibleRoutes
+     * @return array<string, array<string, mixed>>
+     */
+    private function normalizeRouteTotals(array $feasibleRoutes): array
+    {
+        $min = INF;
+        $max = -INF;
+        foreach ($feasibleRoutes as $route) {
+            $total = (float) ($route['total_cost'] ?? INF);
+            $min = min($min, $total);
+            $max = max($max, $total);
+        }
+
+        if (!is_finite($min) || !is_finite($max)) {
+            return $feasibleRoutes;
+        }
+
+        foreach ($feasibleRoutes as $key => $route) {
+            $total = (float) ($route['total_cost'] ?? INF);
+            $normalized = 0.0;
+            if ($max > $min) {
+                $normalized = ($total - $min) / ($max - $min);
+            }
+            $route['normalized_total_cost'] = round($normalized, 6);
+            $feasibleRoutes[$key] = $route;
+        }
+
+        return $feasibleRoutes;
+    }
+
     private function selectBest(array $gate, array $jump, array $hybrid): string
     {
-        $candidates = [];
-        foreach (['gate' => $gate, 'jump' => $jump, 'hybrid' => $hybrid] as $key => $route) {
+        $routes = ['gate' => $gate, 'jump' => $jump, 'hybrid' => $hybrid];
+        $feasible = [];
+        foreach ($routes as $key => $route) {
             if (!empty($route['feasible'])) {
-                $candidates[$key] = (float) ($route['total_cost'] ?? INF);
+                $feasible[$key] = $route;
             }
         }
-        if ($candidates === []) {
+
+        if ($feasible === []) {
             return 'none';
         }
-        asort($candidates);
-        return (string) array_key_first($candidates);
+
+        $normalized = $this->normalizeRouteTotals($feasible);
+        $bestRoute = 'none';
+        $bestCost = INF;
+        foreach ($normalized as $key => $route) {
+            $cost = (float) ($route['normalized_total_cost'] ?? INF);
+            if ($cost < $bestCost) {
+                $bestCost = $cost;
+                $bestRoute = (string) $key;
+            }
+        }
+
+        return $bestRoute;
     }
 
     private function buildExplanation(string $best, array $gate, array $jump, array $hybrid, array $options): array
@@ -2067,7 +2181,7 @@ final class NavigationEngine
             return ['No feasible routes found.'];
         }
         $reasons = [];
-        $reasons[] = sprintf('Selected %s with lowest total cost.', $best);
+        $reasons[] = sprintf('Selected %s with lowest normalized total cost.', $best);
         if ($best === 'hybrid') {
             $reasons[] = 'Hybrid combines gates and jumps while respecting ship restrictions.';
         }
