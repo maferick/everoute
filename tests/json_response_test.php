@@ -36,4 +36,24 @@ assertTrue(($decoded['bad'] ?? null) !== null, 'Expected substituted string valu
 $headers = $response->headers;
 assertTrue(($headers['Content-Type'] ?? '') === 'application/json; charset=utf-8', 'Expected JSON content-type header.');
 
+
+$specialFloats = [
+    'inf' => INF,
+    'neg_inf' => -INF,
+    'nan' => NAN,
+    'ok' => 1.5,
+    'nested' => [
+        'inf' => INF,
+    ],
+];
+$specialResponse = new JsonResponse($specialFloats);
+$specialDecoded = json_decode($specialResponse->body, true);
+
+assertTrue(is_array($specialDecoded), 'Expected JSON to decode for special float payload.');
+assertTrue(array_key_exists('inf', $specialDecoded) && $specialDecoded['inf'] === null, 'Expected INF to be normalized to null.');
+assertTrue(array_key_exists('neg_inf', $specialDecoded) && $specialDecoded['neg_inf'] === null, 'Expected -INF to be normalized to null.');
+assertTrue(array_key_exists('nan', $specialDecoded) && $specialDecoded['nan'] === null, 'Expected NAN to be normalized to null.');
+assertTrue(($specialDecoded['ok'] ?? null) === 1.5, 'Expected finite float to remain unchanged.');
+assertTrue(isset($specialDecoded['nested']) && is_array($specialDecoded['nested']) && array_key_exists('inf', $specialDecoded['nested']) && $specialDecoded['nested']['inf'] === null, 'Expected nested INF to be normalized to null.');
+
 echo "ok\n";
