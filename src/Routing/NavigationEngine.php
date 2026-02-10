@@ -210,7 +210,9 @@ final class NavigationEngine
                     ],
                 ],
                 'hybrid_launch_candidates' => (int) ($hybridRoute['hybrid_launch_candidates'] ?? 0),
-                'hybrid_gate_budget_used' => (int) ($hybridRoute['hybrid_gate_budget_used'] ?? 0),
+                'hybrid_gate_budget_configured' => (int) ($hybridRoute['hybrid_gate_budget_configured'] ?? 0),
+                'hybrid_gate_budget_applied' => (int) ($hybridRoute['hybrid_gate_budget_applied'] ?? 0),
+                'hybrid_gate_budget_used_depth' => (int) ($hybridRoute['hybrid_gate_budget_used_depth'] ?? 0),
                 'hybrid_top_launch_candidates' => $hybridRoute['hybrid_top_launch_candidates'] ?? [],
                 'hybrid_candidate_debug' => $hybridRoute['hybrid_candidate_debug'] ?? $this->lastHybridCandidateDebug,
                 'jump_neighbor_debug' => $jumpRoute['jump_neighbor_debug'] ?? $this->lastJumpNeighborDebug,
@@ -236,16 +238,8 @@ final class NavigationEngine
         ];
         $result = [];
         foreach ($pairs as [$fromName, $toName]) {
-            $from = null;
-            $to = null;
-            foreach ($this->systems as $system) {
-                if (($system['name'] ?? null) === $fromName) {
-                    $from = $system;
-                }
-                if (($system['name'] ?? null) === $toName) {
-                    $to = $system;
-                }
-            }
+            $from = $this->systemLookup->resolveByNameOrId($fromName);
+            $to = $this->systemLookup->resolveByNameOrId($toName);
             $key = $fromName . '->' . $toName;
             if ($from === null || $to === null) {
                 $result[$key] = ['available' => false, 'distance_ly' => null];
@@ -263,33 +257,55 @@ final class NavigationEngine
 
 
     /** @param array<int, int[]> $precomputed @param array<int, array<int, array{to:int,type:string,distance_ly:float}>> $generated */
-    private function dotlanWaypointEdgeDiagnostics(array $precomputed, array $generated, string $shipType, array $options, ?array $allowedSystems): array
+    private function dotlanWaypointEdgeDiagnostics(array $precomputed, array $generated, string $shipType, array $options, ?array $allowedSystems, float $effectiveRange): array
     {
         $pairs = [
             ['from' => 'Irmalin', 'to' => 'Chamemi'],
-            ['from' => 'Chamemi', 'to' => 'Liperer'],
-            ['from' => 'Liperer', 'to' => 'Murethand'],
+            ['from' => 'Chamemi', 'to' => 'Liparer'],
+            ['from' => 'Liparer', 'to' => 'Murethand'],
             ['from' => 'Murethand', 'to' => 'Siseide'],
             ['from' => 'Siseide', 'to' => 'Amamake'],
         ];
 
         $results = [];
         foreach ($pairs as $pair) {
-            $fromId = $this->systemIdByName($pair['from']);
-            $toId = $this->systemIdByName($pair['to']);
+            $from = $this->systemLookup->resolveByNameOrId($pair['from']);
+            $to = $this->systemLookup->resolveByNameOrId($pair['to']);
             $key = $pair['from'] . '->' . $pair['to'];
-            if ($fromId === null || $toId === null) {
+            if ($from === null || $to === null) {
                 $results[$key] = [
                     'distance_ly' => null,
                     'within_range' => null,
                     'was_edge_generated' => false,
-                    'reason' => 'system_not_found',
+                    'reason' => 'system_resolution_failed',
+                ];
+                continue;
+            }
+
+            $fromId = (int) ($from['id'] ?? 0);
+            $toId = (int) ($to['id'] ?? 0);
+            if ($fromId === 0 || $toId === 0 || !isset($this->systems[$fromId]) || !isset($this->systems[$toId])) {
+                $results[$key] = [
+                    'distance_ly' => null,
+                    'within_range' => null,
+                    'was_edge_generated' => false,
+                    'reason' => 'system_resolution_failed',
+                ];
+                continue;
+            }
+            if (!$this->hasCoordinates($this->systems[$fromId]) || !$this->hasCoordinates($this->systems[$toId])) {
+                $results[$key] = [
+                    'distance_ly' => null,
+                    'within_range' => null,
+                    'was_edge_generated' => false,
+                    'reason' => 'missing_coordinates',
                 ];
                 continue;
             }
 
             $distance = JumpMath::distanceLy($this->systems[$fromId], $this->systems[$toId]);
-            $withinRange = in_array($toId, $precomputed[$fromId] ?? [], true);
+            $withinRange = $distance <= $effectiveRange;
+            $inPrecomputed = in_array($toId, $precomputed[$fromId] ?? [], true);
             $generatedEdge = false;
             foreach ($generated[$fromId] ?? [] as $edge) {
                 if ((int) ($edge['to'] ?? 0) === $toId) {
@@ -300,13 +316,15 @@ final class NavigationEngine
 
             $reason = 'generated';
             if (!$withinRange) {
-                $reason = 'bucket_query_miss_or_out_of_range';
+                $reason = 'out_of_range';
+            } elseif (!$inPrecomputed) {
+                $reason = 'bucket_query_miss';
             } elseif ($allowedSystems !== null && (!isset($allowedSystems[$fromId]) || !isset($allowedSystems[$toId]))) {
                 $reason = 'bounded_candidate_filter';
             } elseif (!$generatedEdge) {
                 $fromReason = $this->jumpPolicyFilterReason($shipType, $this->systems[$fromId], false, $options);
                 $toReason = $this->jumpPolicyFilterReason($shipType, $this->systems[$toId], false, $options);
-                $reason = $fromReason ?? $toReason ?? 'filtered_other';
+                $reason = $fromReason ?? $toReason ?? 'filtered_internal_error';
             }
 
             $results[$key] = [
@@ -320,14 +338,12 @@ final class NavigationEngine
         return $results;
     }
 
-    private function systemIdByName(string $name): ?int
+    private function hasCoordinates(array $system): bool
     {
-        foreach ($this->systems as $id => $system) {
-            if (($system['name'] ?? null) === $name) {
-                return (int) $id;
-            }
-        }
-        return null;
+        return isset($system['x'], $system['y'], $system['z'])
+            && is_numeric($system['x'])
+            && is_numeric($system['y'])
+            && is_numeric($system['z']);
     }
 
     private function resolveShipType(array $options): string
@@ -650,9 +666,9 @@ final class NavigationEngine
         }
 
         $boundedCandidates = $this->boundedJumpCandidateSet($startId, $endId, $rangeBucket);
-        $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, $debugLogs, $boundedCandidates);
+        $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, $debugLogs, $effectiveRange, $boundedCandidates);
         $this->lastJumpNeighborDebug = $graph['debug'] ?? [];
-        $dotlanEdgeChecks = $this->dotlanWaypointEdgeDiagnostics($neighbors, $graph['neighbors'], $shipType, $options, $boundedCandidates);
+        $dotlanEdgeChecks = $this->dotlanWaypointEdgeDiagnostics($neighbors, $graph['neighbors'], $shipType, $options, $boundedCandidates, $effectiveRange);
         if ($debugLogs && $graph['debug_sample'] !== []) {
             $this->logger->debug('Jump neighbor sample', [
                 'bucket' => $rangeBucket,
@@ -1169,6 +1185,7 @@ final class NavigationEngine
             $shipType,
             $options,
             false,
+            $effectiveRange,
             $boundedCandidates
         );
         $gateGraph = $this->buildGateGraph($startId, $endId, $shipType, $options);
@@ -1320,7 +1337,7 @@ final class NavigationEngine
         }
 
         $allowGateReposition = !array_key_exists('allow_gate_reposition', $options) || !empty($options['allow_gate_reposition']);
-        $hybridGateBudgetMax = max(2, min(12, (int) ($options['hybrid_gate_budget_max'] ?? 8)));
+        $hybridGateBudgetMax = max(0, min(12, (int) ($options['hybrid_gate_budget_max'] ?? 8)));
         $launchHopLimit = $allowGateReposition ? $hybridGateBudgetMax : 0;
         $landingHopLimit = max(0, min(10, (int) ($options['hybrid_landing_hops'] ?? 4)));
         $launchCandidateLimit = max(1, min(200, (int) ($options['hybrid_launch_candidate_limit'] ?? 50)));
@@ -1333,7 +1350,8 @@ final class NavigationEngine
         $hopsToEnd = $this->buildGateHopMap($endId, $shipType, $options, $this->reverseAdjacency);
         $hopsFromStart = $this->buildGateHopMap($startId, $shipType, $options, $this->adjacency);
         $baselineGateHops = $hopsToEnd[$startId] ?? null;
-
+        $boundedCandidates = $this->boundedJumpCandidateSet($startId, $endId, $rangeBucket);
+        $jumpNeighbors = $this->buildHybridJumpNeighbors($neighbors, $boundedCandidates, $effectiveRange);
 
         $launchCandidates = $this->buildHybridLaunchCandidates(
             $startId,
@@ -1354,7 +1372,9 @@ final class NavigationEngine
                 'nodes_explored' => 0,
                 'illegal_systems_filtered' => 0,
                 'hybrid_launch_candidates' => 0,
-                'hybrid_gate_budget_used' => $launchHopLimit,
+                'hybrid_gate_budget_configured' => $hybridGateBudgetMax,
+                'hybrid_gate_budget_applied' => $launchHopLimit,
+                'hybrid_gate_budget_used_depth' => (int) ($this->lastHybridCandidateDebug['bfs_depth_reached'] ?? 0),
                 'hybrid_candidate_debug' => $this->lastHybridCandidateDebug,
             ];
         }
@@ -1378,8 +1398,6 @@ final class NavigationEngine
             ];
         }
 
-        $boundedCandidates = $this->boundedJumpCandidateSet($startId, $endId, $rangeBucket);
-        $jumpNeighbors = $this->buildHybridJumpNeighbors($neighbors, $boundedCandidates);
         $dijkstra = new Dijkstra();
         $bestPlan = null;
         $bestCost = INF;
@@ -1546,7 +1564,9 @@ final class NavigationEngine
             'required_min_improvement' => $minHybridSelectionImprovement,
         ];
         $bestPlan['hybrid_launch_candidates'] = count($launchCandidates);
-        $bestPlan['hybrid_gate_budget_used'] = $launchHopLimit;
+        $bestPlan['hybrid_gate_budget_configured'] = $hybridGateBudgetMax;
+        $bestPlan['hybrid_gate_budget_applied'] = $launchHopLimit;
+        $bestPlan['hybrid_gate_budget_used_depth'] = (int) ($this->lastHybridCandidateDebug['bfs_depth_reached'] ?? 0);
         $topLaunch = array_slice(array_map(static function (array $candidate): array {
             return [
                 'system_id' => (int) ($candidate['system_id'] ?? 0),
@@ -1977,6 +1997,7 @@ final class NavigationEngine
         string $shipType,
         array $options,
         bool $debugLogs,
+        float $effectiveRange,
         ?array $allowedSystems = null
     ): array
     {
@@ -2020,6 +2041,11 @@ final class NavigationEngine
                 if ($allowedSystems !== null && !isset($allowedSystems[(int) $to])) {
                     continue;
                 }
+
+                $distance = JumpMath::distanceLy($this->systems[$from], $this->systems[$to]);
+                if ($distance > $effectiveRange) {
+                    continue;
+                }
                 $rangeCount++;
 
                 $toIsMidpoint = $to !== $startId && $to !== $endId;
@@ -2035,7 +2061,7 @@ final class NavigationEngine
                 $neighbors[$from][] = [
                     'to' => $to,
                     'type' => 'jump',
-                    'distance_ly' => JumpMath::distanceLy($this->systems[$from], $this->systems[$to]),
+                    'distance_ly' => $distance,
                 ];
             }
             if ($debugLogs && $sampled < $sampleLimit) {
@@ -2386,7 +2412,7 @@ final class NavigationEngine
                 ]);
                 continue;
             }
-            $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, false, null);
+            $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, false, (float) $bucket, null);
             if (!isset($graph['neighbors'][$startId]) || !isset($graph['neighbors'][$endId])) {
                 $this->logger->debug('Jump diagnostic filtered endpoints', [
                     'bucket' => $bucket,
@@ -2835,7 +2861,7 @@ final class NavigationEngine
      * @param array<int, int[]> $precomputed
      * @return array<int, array<int, array<string, mixed>>>
      */
-    private function buildHybridJumpNeighbors(array $precomputed, ?array $allowedSystems = null): array
+    private function buildHybridJumpNeighbors(array $precomputed, ?array $allowedSystems = null, ?float $effectiveRange = null): array
     {
         $neighbors = [];
         foreach ($precomputed as $from => $toList) {
@@ -2852,10 +2878,14 @@ final class NavigationEngine
                 if ($allowedSystems !== null && !isset($allowedSystems[(int) $to])) {
                     continue;
                 }
+                $distance = JumpMath::distanceLy($this->systems[$from], $this->systems[$to]);
+                if ($effectiveRange !== null && $distance > $effectiveRange) {
+                    continue;
+                }
                 $neighbors[$from][] = [
                     'to' => $to,
                     'type' => 'jump',
-                    'distance_ly' => JumpMath::distanceLy($this->systems[$from], $this->systems[$to]),
+                    'distance_ly' => $distance,
                 ];
             }
             if (!isset($neighbors[$from])) {
@@ -3122,9 +3152,12 @@ final class NavigationEngine
             'filter_reasons_count' => [
                 'filtered_illegal_security' => 0,
                 'filtered_avoid_list' => 0,
-                'filtered_missing_station' => 0,
+                'filtered_missing_coordinates' => 0,
                 'filtered_no_jump_neighbors' => 0,
-                'filtered_other' => 0,
+                'filtered_no_jump_connectivity_to_destination' => 0,
+                'filtered_exceeds_gate_budget' => 0,
+                'filtered_candidate_disabled_by_setting' => 0,
+                'filtered_internal_error' => 0,
             ],
             'strict_pass_count' => 0,
             'soft_pass_count' => 0,
@@ -3164,7 +3197,7 @@ final class NavigationEngine
             $system = $this->systems[$systemId];
             $profile = $this->baseCostProfiles[$systemId] ?? null;
             if ($profile === null) {
-                $debug['filter_reasons_count']['filtered_other']++;
+                $debug['filter_reasons_count']['filtered_internal_error']++;
                 continue;
             }
 
@@ -3172,6 +3205,10 @@ final class NavigationEngine
             $strictLegal = $strictReason === null;
             if (!$strictLegal && $strictReason === 'filtered_avoid_list') {
                 $debug['filter_reasons_count']['filtered_avoid_list']++;
+                continue;
+            }
+            if (!$this->hasCoordinates($system)) {
+                $debug['filter_reasons_count']['filtered_missing_coordinates']++;
                 continue;
             }
             if ($strictLegal) {
@@ -3182,6 +3219,15 @@ final class NavigationEngine
 
             if ($jumpNeighbors !== null && count($jumpNeighbors[$systemId] ?? []) < 1) {
                 $debug['filter_reasons_count']['filtered_no_jump_neighbors']++;
+                continue;
+            }
+            if ($gateHops > $maxHops) {
+                $debug['filter_reasons_count']['filtered_exceeds_gate_budget']++;
+                continue;
+            }
+
+            if (!array_key_exists($systemId, $hopsToEnd)) {
+                $debug['filter_reasons_count']['filtered_no_jump_connectivity_to_destination']++;
                 continue;
             }
 
@@ -3210,7 +3256,7 @@ final class NavigationEngine
             if ($baselineGateHops !== null && $remainingGateHops !== null) {
                 $benefitHops = $baselineGateHops - ((int) $gateHops + (int) $remainingGateHops);
                 if ($benefitHops < $minSegmentBenefitHops) {
-                    $debug['filter_reasons_count']['filtered_other']++;
+                    $debug['filter_reasons_count']['filtered_candidate_disabled_by_setting']++;
                     continue;
                 }
             }

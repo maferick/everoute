@@ -22,16 +22,58 @@ final class SystemRepository
 
     public function findByNameOrId(string $value): ?array
     {
-        $pdo = $this->connection->pdo();
-        $selectFields = $this->systemSelectFields();
-        if (ctype_digit($value)) {
-            $stmt = $pdo->prepare("SELECT {$selectFields} FROM systems WHERE id = :id");
-            $stmt->execute(['id' => (int) $value]);
-        } else {
-            $stmt = $pdo->prepare("SELECT {$selectFields} FROM systems WHERE name = :name");
-            $stmt->execute(['name' => $value]);
+        return $this->resolveSystem($value);
+    }
+
+    public function resolveSystem(string|int $input): ?array
+    {
+        if (is_int($input) || ctype_digit((string) $input)) {
+            return $this->getSystemById((int) $input);
         }
+
+        $name = trim((string) $input);
+        if ($name === "") {
+            return null;
+        }
+
+        $exact = $this->getSystemByNameExact($name);
+        if ($exact !== null) {
+            return $exact;
+        }
+
+        return $this->getSystemByNameCI($name);
+    }
+
+    public function getSystemById(int $id): ?array
+    {
+        $selectFields = $this->systemSelectFields();
+        $stmt = $this->connection->pdo()->prepare("SELECT {$selectFields} FROM systems WHERE id = :id LIMIT 1");
+        $stmt->execute(['id' => $id]);
+
         $row = $stmt->fetch();
+
+        return $row ?: null;
+    }
+
+    public function getSystemByNameExact(string $name): ?array
+    {
+        $selectFields = $this->systemSelectFields();
+        $stmt = $this->connection->pdo()->prepare("SELECT {$selectFields} FROM systems WHERE name = :name LIMIT 1");
+        $stmt->execute(['name' => $name]);
+
+        $row = $stmt->fetch();
+
+        return $row ?: null;
+    }
+
+    public function getSystemByNameCI(string $name): ?array
+    {
+        $selectFields = $this->systemSelectFields();
+        $stmt = $this->connection->pdo()->prepare("SELECT {$selectFields} FROM systems WHERE LOWER(name) = LOWER(:name) LIMIT 1");
+        $stmt->execute(['name' => $name]);
+
+        $row = $stmt->fetch();
+
         return $row ?: null;
     }
 
