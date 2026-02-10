@@ -25,15 +25,100 @@ if (rangeInput && rangeValue) {
 
 const form = document.querySelector('[data-route-form]');
 if (form) {
-    form.addEventListener('submit', () => {
-        const button = form.querySelector('[data-submit]');
-        if (button) {
-            button.disabled = true;
-            button.classList.add('loading');
-            const text = button.querySelector('.button-text');
-            if (text) {
-                text.textContent = 'Calculating…';
+    const button = form.querySelector('[data-submit]');
+    const statusEl = document.querySelector('[data-job-status]');
+    const progressEl = document.querySelector('[data-job-progress]');
+    const summaryEl = document.querySelector('[data-job-summary]');
+    const resultEl = document.querySelector('[data-job-result]');
+
+    const setButtonLoading = (loading, label = 'Plan Route') => {
+        if (!button) return;
+        button.disabled = loading;
+        button.classList.toggle('loading', loading);
+        const text = button.querySelector('.button-text');
+        if (text) text.textContent = label;
+    };
+
+    const collectPayload = () => {
+        const data = new FormData(form);
+        return Object.fromEntries(data.entries());
+    };
+
+    const describeRequest = (payload) => {
+        const toggles = [
+            payload.avoid_lowsec ? 'Avoid lowsec' : null,
+            payload.avoid_nullsec ? 'Avoid nullsec' : null,
+            payload.prefer_npc_stations ? 'Prefer NPC stations' : null,
+            payload.require_station_midpoints ? 'Require station midpoints' : null,
+        ].filter(Boolean);
+        return `Mode: ${payload.mode || 'subcap'} · Range bias: ${payload.safety_vs_speed || 50}%${toggles.length ? ` · ${toggles.join(', ')}` : ''}`;
+    };
+
+    const pollJob = async (jobId) => {
+        const startedAt = Date.now();
+        while (true) {
+            const response = await fetch(`/api/v1/route-jobs/${encodeURIComponent(jobId)}`);
+            if (!response.ok) {
+                throw new Error('Unable to poll route job.');
             }
+            const data = await response.json();
+            const progress = data.progress || {};
+            if (progressEl) {
+                const pct = Number.isFinite(progress.pct) ? `${progress.pct}%` : '';
+                progressEl.textContent = [progress.message, pct].filter(Boolean).join(' · ') || 'Working...';
+            }
+            if (Date.now() - startedAt > 15000 && statusEl) {
+                statusEl.textContent = 'Still working…';
+            }
+
+            if (data.status === 'done') {
+                if (statusEl) statusEl.textContent = 'Done';
+                if (resultEl) {
+                    resultEl.hidden = false;
+                    resultEl.textContent = JSON.stringify(data.result || {}, null, 2);
+                }
+                return;
+            }
+            if (data.status === 'failed') {
+                throw new Error(data.error || 'Route calculation failed.');
+            }
+            if (data.status === 'canceled') {
+                throw new Error('Route calculation canceled.');
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, 800));
+        }
+    };
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const payload = collectPayload();
+        if (statusEl) statusEl.textContent = 'Calculating route…';
+        if (summaryEl) summaryEl.textContent = describeRequest(payload);
+        if (progressEl) progressEl.textContent = 'Queueing job...';
+        if (resultEl) {
+            resultEl.hidden = true;
+            resultEl.textContent = '';
+        }
+        setButtonLoading(true, 'Calculating…');
+
+        try {
+            const createResponse = await fetch('/api/v1/route-jobs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!createResponse.ok) {
+                throw new Error('Unable to create route job.');
+            }
+            const created = await createResponse.json();
+            if (statusEl) statusEl.textContent = created.status || 'queued';
+            await pollJob(created.job_id);
+        } catch (error) {
+            if (statusEl) statusEl.textContent = 'Failed';
+            if (progressEl) progressEl.textContent = error.message || 'Unknown error';
+        } finally {
+            setButtonLoading(false, 'Plan Route');
         }
     });
 }

@@ -534,3 +534,20 @@ button.loading .button-spinner {
         justify-content: flex-start;
     }
 }
+
+.job-status {
+    border: 1px solid rgba(120, 144, 156, 0.3);
+    border-radius: 10px;
+    padding: 0.8rem;
+    margin-bottom: 1rem;
+    background: rgba(15, 23, 42, 0.35);
+}
+
+.job-result {
+    max-height: 280px;
+    overflow: auto;
+    font-size: 0.8rem;
+    background: rgba(2, 6, 23, 0.9);
+    border-radius: 8px;
+    padding: 0.75rem;
+}

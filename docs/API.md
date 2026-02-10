@@ -219,3 +219,23 @@ Returns risk stats for all systems and update timestamp.
 
 ## GET /health
 Returns `{ "status": "ok", "risk_provider": "manual|zkillredisq" }` plus risk update timestamps and ingestion heartbeat when available.
+
+## Async route jobs
+
+### `POST /api/v1/route-jobs`
+Creates a route calculation job and returns immediately.
+
+Response (`202`):
+```json
+{
+  "job_id": "uuid",
+  "status": "queued",
+  "poll_url": "/api/v1/route-jobs/uuid"
+}
+```
+
+### `GET /api/v1/route-jobs/{job_id}`
+Returns job status, progress, and result when available.
+
+### `DELETE /api/v1/route-jobs/{job_id}`
+Attempts to cancel a queued/running job.

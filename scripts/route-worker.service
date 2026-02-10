@@ -1,0 +1,15 @@
+[Unit]
+Description=Everoute Route Worker
+After=network.target mariadb.service
+
+[Service]
+Type=simple
+WorkingDirectory=/workspace/everoute
+ExecStart=/usr/bin/php /workspace/everoute/bin/route-worker.php
+Restart=always
+RestartSec=2
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target

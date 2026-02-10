@@ -266,7 +266,15 @@ if (!empty($engineRoutes['Gate']['segments'])) {
         <section class="card results-card">
             <div class="results-header">
                 <h2>Results</h2>
-                <?php if ($hasResult): ?>
+    
+            <div class="job-status" aria-live="polite">
+                <p class="muted" data-job-status>Idle</p>
+                <p class="muted" data-job-summary>Submit a route request to start async processing.</p>
+                <p class="muted" data-job-progress></p>
+                <pre class="job-result" data-job-result hidden></pre>
+            </div>
+
+            <?php if ($hasResult): ?>
                     <div class="meta">CCP ESI system kills (last hour) — updated: <?= htmlspecialchars((string) ($result['risk_updated_at'] ?? 'n/a'), ENT_QUOTES) ?></div>
                 <?php endif; ?>
             </div>
