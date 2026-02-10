@@ -3,14 +3,19 @@
 declare(strict_types=1);
 
 use Everoute\DB\Connection;
+use Everoute\Http\ApiController;
+use Everoute\Http\Request;
 use Everoute\Risk\RiskRepository;
 use Everoute\Routing\JumpFatigueModel;
 use Everoute\Routing\JumpMath;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\NavigationEngine;
+use Everoute\Routing\RouteService;
 use Everoute\Routing\ShipRules;
 use Everoute\Routing\SystemLookup;
 use Everoute\Security\Logger;
+use Everoute\Security\RateLimiter;
+use Everoute\Security\Validator;
 use Everoute\Universe\JumpNeighborCodec;
 use Everoute\Universe\JumpNeighborRepository;
 use Everoute\Universe\StargateRepository;
@@ -22,6 +27,10 @@ if (file_exists($autoload)) {
 } else {
     require_once __DIR__ . '/../src/Config/Env.php';
     require_once __DIR__ . '/../src/DB/Connection.php';
+    require_once __DIR__ . '/../src/Http/ApiController.php';
+    require_once __DIR__ . '/../src/Http/Response.php';
+    require_once __DIR__ . '/../src/Http/JsonResponse.php';
+    require_once __DIR__ . '/../src/Http/Request.php';
     require_once __DIR__ . '/../src/Routing/Graph.php';
     require_once __DIR__ . '/../src/Routing/GraphStore.php';
     require_once __DIR__ . '/../src/Routing/Dijkstra.php';
@@ -30,9 +39,12 @@ if (file_exists($autoload)) {
     require_once __DIR__ . '/../src/Routing/JumpShipType.php';
     require_once __DIR__ . '/../src/Routing/JumpRangeCalculator.php';
     require_once __DIR__ . '/../src/Routing/NavigationEngine.php';
+    require_once __DIR__ . '/../src/Routing/RouteService.php';
     require_once __DIR__ . '/../src/Routing/ShipRules.php';
     require_once __DIR__ . '/../src/Routing/SystemLookup.php';
     require_once __DIR__ . '/../src/Security/Logger.php';
+    require_once __DIR__ . '/../src/Security/RateLimiter.php';
+    require_once __DIR__ . '/../src/Security/Validator.php';
     require_once __DIR__ . '/../src/Universe/JumpNeighborCodec.php';
     require_once __DIR__ . '/../src/Universe/JumpNeighborRepository.php';
     require_once __DIR__ . '/../src/Universe/StargateRepository.php';
@@ -42,7 +54,7 @@ if (file_exists($autoload)) {
 }
 
 if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
-    echo "SQLite driver not available, skipping avoid fallback test.\n";
+    echo "SQLite driver not available, skipping API strictness normalization test.\n";
     exit(0);
 }
 
@@ -52,6 +64,7 @@ $pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security RE
 $pdo->exec('CREATE TABLE stargates (from_system_id INTEGER, to_system_id INTEGER, is_regional_gate INTEGER)');
 $pdo->exec('CREATE TABLE system_risk (system_id INTEGER, ship_kills_1h INTEGER, pod_kills_1h INTEGER, npc_kills_1h INTEGER, updated_at TEXT, risk_updated_at TEXT, kills_last_1h INTEGER, kills_last_24h INTEGER, pod_kills_last_1h INTEGER, pod_kills_last_24h INTEGER, last_updated_at TEXT)');
 $pdo->exec('CREATE TABLE jump_neighbors (system_id INTEGER, range_ly INTEGER, neighbor_count INTEGER, neighbor_ids_blob BLOB, encoding_version INTEGER, updated_at TEXT)');
+$pdo->exec('CREATE TABLE risk_meta (provider TEXT PRIMARY KEY, updated_at TEXT, last_modified TEXT)');
 
 $metersPerLy = JumpMath::METERS_PER_LY;
 $systems = [
@@ -84,82 +97,67 @@ foreach ($neighborsBySystem as $systemId => $neighborIds) {
 
 $logger = new Logger();
 $systemsRepo = new SystemRepository($connection);
+$riskRepo = new RiskRepository($connection);
 $engine = new NavigationEngine(
     $systemsRepo,
     new StargateRepository($connection),
     new JumpNeighborRepository($connection, $logger),
-    new RiskRepository($connection),
+    $riskRepo,
     new JumpRangeCalculator(__DIR__ . '/../config/ships.php', __DIR__ . '/../config/jump_ranges.php'),
     new JumpFatigueModel(),
     new ShipRules(),
     new SystemLookup($systemsRepo),
     $logger
 );
+$routeService = new RouteService($engine, $logger, null, 600);
+$controller = new ApiController($routeService, $riskRepo, $systemsRepo, new Validator(), new RateLimiter(1000, 1000));
 
-$options = [
+$baseBody = [
     'from' => 'LS-Start',
     'to' => 'LS-End',
     'mode' => 'capital',
     'ship_class' => 'capital',
     'jump_ship_type' => 'carrier',
     'jump_skill_level' => 5,
+    'safety_vs_speed' => 50,
     'avoid_lowsec' => true,
     'avoid_nullsec' => false,
-    'safety_vs_speed' => 50,
 ];
 
-$result = $engine->compute($options);
-foreach (['gate_route', 'jump_route', 'hybrid_route'] as $routeKey) {
-    $route = $result[$routeKey] ?? [];
-    if (empty($route['fallback_used'])) {
-        throw new RuntimeException($routeKey . ' should mark fallback_used when strict avoid fails.');
-    }
-    if (empty($route['fallback_warning'])) {
-        throw new RuntimeException($routeKey . ' should expose fallback warning metadata.');
-    }
-    if (($route['applied_avoid_strictness'] ?? '') !== 'soft') {
-        throw new RuntimeException($routeKey . ' should end on soft strictness after fallback.');
-    }
-    if (($route['requested_avoid_strictness'] ?? '') !== 'strict') {
-        throw new RuntimeException($routeKey . ' should default requested strictness to strict with avoid toggles.');
-    }
+$implicitRequest = new Request('POST', '/api/route', [], $baseBody, [], '127.0.0.1');
+$implicitResponse = $controller->route($implicitRequest);
+$implicitPayload = json_decode($implicitResponse->body, true);
+if (!is_array($implicitPayload)) {
+    throw new RuntimeException('Expected JSON payload for implicit strictness request.');
 }
 
-
-$explicitSoftOptions = $options;
-$explicitSoftOptions['avoid_strictness'] = 'soft';
-$softResult = $engine->compute($explicitSoftOptions);
-if (($softResult['gate_route']['requested_avoid_strictness'] ?? '') !== 'soft') {
-    throw new RuntimeException('Explicit soft avoid strictness should remain soft in requested strictness metadata.');
+if (($implicitPayload['gate_route']['requested_avoid_strictness'] ?? '') !== 'strict') {
+    throw new RuntimeException('Omitted avoid_strictness should default to strict when avoid toggles are enabled.');
 }
-if (($softResult['gate_route']['applied_avoid_strictness'] ?? '') !== 'soft') {
-    throw new RuntimeException('Explicit soft avoid strictness should remain soft in applied strictness metadata.');
+if (($implicitPayload['gate_route']['applied_avoid_strictness'] ?? '') !== 'soft') {
+    throw new RuntimeException('Implicit strictness request should fall back to soft on infeasible strict path.');
 }
-if (!empty($softResult['gate_route']['fallback_used'])) {
-    throw new RuntimeException('Explicit soft avoid strictness should not be marked as fallback-used.');
+if (empty($implicitPayload['gate_route']['fallback_used'])) {
+    throw new RuntimeException('Implicit strictness request should mark fallback_used in route payload.');
 }
 
-if (empty($result['gate_route']['feasible']) || empty($result['jump_route']['feasible'])) {
-    throw new RuntimeException('Gate and jump routes should become feasible after soft avoid fallback.');
+$explicitSoftBody = $baseBody;
+$explicitSoftBody['avoid_strictness'] = 'soft';
+$softRequest = new Request('POST', '/api/route', [], $explicitSoftBody, [], '127.0.0.1');
+$softResponse = $controller->route($softRequest);
+$softPayload = json_decode($softResponse->body, true);
+if (!is_array($softPayload)) {
+    throw new RuntimeException('Expected JSON payload for explicit soft request.');
 }
 
-if (empty($result['fallback_warning']) || empty($result['fallback_message'])) {
-    throw new RuntimeException('Top-level payload should include fallback warning details for selected route.');
+if (($softPayload['gate_route']['requested_avoid_strictness'] ?? '') !== 'soft') {
+    throw new RuntimeException('Explicit avoid_strictness=soft should be preserved by API normalization.');
 }
-if (($result['chosen_route_lowsec_count'] ?? 0) <= 0) {
-    throw new RuntimeException('Top-level payload should include chosen route lowsec count.');
+if (($softPayload['gate_route']['applied_avoid_strictness'] ?? '') !== 'soft') {
+    throw new RuntimeException('Explicit soft strictness should remain soft in applied strictness.');
 }
-
-$explanation = $result['explanation'] ?? [];
-$bestEffortMentioned = false;
-foreach ($explanation as $line) {
-    if (stripos((string) $line, 'best effort route') !== false) {
-        $bestEffortMentioned = true;
-        break;
-    }
-}
-if (!$bestEffortMentioned) {
-    throw new RuntimeException('Explanation should mention best effort route fallback behavior.');
+if (!empty($softPayload['gate_route']['fallback_used'])) {
+    throw new RuntimeException('Explicit soft strictness should not be marked as fallback_used.');
 }
 
-echo "Navigation avoid fallback test passed.\n";
+echo "API strictness normalization test passed.\n";
