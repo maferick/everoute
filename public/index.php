@@ -109,6 +109,8 @@ try {
 
         $safetyVsSpeed = max(0, min(100, (int) ($_POST['safety_vs_speed'] ?? 50)));
         $preferNpcStations = !empty($_POST['prefer_npc_stations']);
+        $requireStationMidpoints = !empty($_POST['require_station_midpoints']) || !empty($_POST['use_stations']);
+        $stationConstraintMode = (($_POST['avoid_strictness'] ?? '') === 'strict') ? 'strict' : 'soft';
 
         $payload = [
             'from' => $_POST['from_id'] ?? ($_POST['from'] ?? ''),
@@ -125,6 +127,8 @@ try {
             'avoid_strictness' => $_POST['avoid_strictness'] ?? '',
             'avoid_specific_systems' => $_POST['avoid_specific_systems'] ?? '',
             'prefer_npc_stations' => $preferNpcStations,
+            'require_station_midpoints' => $requireStationMidpoints,
+            'station_constraint_mode' => $stationConstraintMode,
             'allow_gate_reposition' => !array_key_exists('allow_gate_reposition', $_POST) || !empty($_POST['allow_gate_reposition']),
             'hybrid_gate_budget_max' => max(2, min(12, (int) ($_POST['hybrid_gate_budget_max'] ?? 8))),
             'debug' => !empty($_POST['debug']),

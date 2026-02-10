@@ -99,6 +99,7 @@ $buildRouteSteps = static function (array $route): array {
             'type' => $segment['type'] ?? ($index === 0 ? 'start' : 'gate'),
             'hop_ly' => $segment['distance_ly'] ?? null,
             'npc' => $system['has_npc_station'] ?? null,
+            'station_ok' => $segment === null ? null : !((bool) ($segment['station_violation'] ?? false)),
         ];
     }
 
@@ -224,6 +225,7 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                         <label class="toggle"><input type="checkbox" name="avoid_lowsec" <?= !empty($_POST['avoid_lowsec']) ? 'checked' : '' ?>> Avoid lowsec</label>
                         <label class="toggle"><input type="checkbox" name="avoid_nullsec" <?= !empty($_POST['avoid_nullsec']) ? 'checked' : '' ?>> Avoid nullsec</label>
                         <label class="toggle"><input type="checkbox" name="prefer_npc_stations" <?= !empty($_POST['prefer_npc_stations']) ? 'checked' : '' ?>> Prefer NPC stations (policy follows slider)</label>
+                        <label class="toggle"><input type="checkbox" name="require_station_midpoints" <?= !empty($_POST['require_station_midpoints']) || !empty($_POST['use_stations']) ? 'checked' : '' ?>> Use stations (midpoints)</label>
                         <label class="toggle"><input type="checkbox" name="debug" <?= !empty($_POST['debug']) ? 'checked' : '' ?>> Debug</label>
                     </div>
 
@@ -484,6 +486,7 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                                                     <th>Type</th>
                                                     <th>Hop LY</th>
                                                     <th>NPC</th>
+                                                    <th>Station OK</th>
                                                 </tr>
                                                 </thead>
                                                 <tbody>
@@ -495,6 +498,15 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                                                         <td><?= htmlspecialchars(ucfirst((string) $step['type']), ENT_QUOTES) ?></td>
                                                         <td><?= $step['hop_ly'] !== null ? htmlspecialchars($formatLy((float) $step['hop_ly']), ENT_QUOTES) : '—' ?></td>
                                                         <td><?= $step['npc'] ? 'NPC' : '—' ?></td>
+                                                        <td>
+                                                            <?php if ($step['station_ok'] === null): ?>
+                                                                —
+                                                            <?php elseif ($step['station_ok'] === false): ?>
+                                                                <span class="station-violation">⚠ violation</span>
+                                                            <?php else: ?>
+                                                                ✅
+                                                            <?php endif; ?>
+                                                        </td>
                                                     </tr>
                                                 <?php endforeach; ?>
                                                 </tbody>
