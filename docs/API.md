@@ -31,19 +31,23 @@ Base: `/api/v1`
 | `ship_class` | string | `subcap` | One of `subcap`, `interceptor`, `dst`, `freighter`, `capital`, `jump_freighter`, `super`, `titan`. |
 | `jump_ship_type` | string | `carrier` | Used for jump range (capital/JF planning only). |
 | `jump_skill_level` | number | `5` | Jump Drive Calibration level (0-5). |
-| `safety_vs_speed` | number | `50` (`70` for capital) | Bias for risk vs speed. |
+| `safety_vs_speed` | number | `50` (`70` for capital) | Bias for risk vs speed; drives `w_time`, `w_risk`, and `w_pref` scoring weights. |
 | `preference` | string | `shorter` | Gate-only tie-breaker: `shorter`, `safer`, or `less_secure`. |
 | `avoid_lowsec` | boolean | `false` | Avoid low-sec space (soft penalty or hard filter depending on strictness). |
 | `avoid_nullsec` | boolean | `false` | Avoid null-sec space (soft penalty or hard filter depending on strictness). |
-| `avoid_strictness` | string | `soft` | `soft` applies penalties; `strict` filters low/null-sec from eligible systems with fallback to soft if no route is feasible. |
+| `avoid_strictness` | string | `soft` | `soft` applies penalties; `strict` filters low/null-sec, then automatically retries with soft semantics when no feasible route exists. |
 | `avoid_specific_systems` | string | empty | Comma-separated system names/IDs to exclude. |
-| `prefer_npc_stations` | boolean | `false` (true for capital) | Adds a bonus to NPC-station systems for gate, jump, and hybrid planners. |
+| `prefer_npc_stations` | boolean | `false` (true for capital) | Enables NPC preference behavior: route-level `npc_bonus` + `preference_cost` for gate, jump, and hybrid planners. |
 | `debug` | boolean | `false` | When enabled, adds debug statistics to jump planning responses. |
 
 ### Notes
 - `jump_ship_type` and `jump_skill_level` are used for jump-assisted planning in Capital/JF mode.
 - Hybrid planning uses gate-to-launch plus jump chain with optional landing gate segment. Configure hop limits with `HYBRID_LAUNCH_MAX_GATES` (default 6) and `HYBRID_LANDING_MAX_GATES` (default 3).
-- Avoid low/null-sec settings are treated as soft penalties for jump planning unless `avoid_strictness=strict`.
+- Weighting model uses `safety_vs_speed` (`s=safety_vs_speed/100`): `w_time=1.2-0.7*s`, `w_risk=0.2+1.2*s`, `w_pref=0.15+0.1*s`.
+- Scoring total is `time_cost*w_time + risk_cost*w_risk + preference_cost*w_pref + npc_bonus`.
+- Strict avoid fallback semantics: with `avoid_strictness=strict`, the engine first filters avoided security bands; if no feasible route is found, it retries with soft penalties and returns `fallback_used=true`, `requested_avoid_strictness=strict`, `applied_avoid_strictness=soft`.
+- In speed-leaning mode (`safety_vs_speed<=25`), jump can dominate hybrid when `jump.time_cost <= hybrid.time_cost*0.95`.
+- In speed-leaning comparisons with similar time, extra-gate dominance penalties can be added for routes with ≥2 extra gates and `time_delta<=0.1`.
 - When routes are not feasible (e.g. capital start/end in high-sec), the response includes `error` and `reason`.
 - When `APP_DEBUG=true`, jump planning responses include a `debug` object with candidate/edge counts and max segment distance.
 - Jump fatigue calculations currently use `phoebe-2018-v1`; debug payloads and route-cache keys include this version for traceability.
@@ -134,6 +138,38 @@ Base: `/api/v1`
 }
 ```
 
+### Example snippet (cost breakdown + selection reason)
+```json
+{
+  "routes": {
+    "balanced": {
+      "best_selection_reason": "normalized_total_cost_with_extra_gate_penalty",
+      "plans": {
+        "jump": {
+          "time_cost": 0.18,
+          "risk_cost": 0.31,
+          "preference_cost": 0.22,
+          "total_cost": 0.4123,
+          "weights_used": {"w_time": 0.99, "w_risk": 0.56, "w_pref": 0.18},
+          "penalties_bonuses": {
+            "npc_bonus": -0.11,
+            "selection_penalty": 0.04,
+            "extra_gate_penalty": 0.04,
+            "cooldown_cap_penalty_minutes": 0
+          },
+          "dominance_flags": {
+            "selected_as_best": true,
+            "dominance_rule_applied": false,
+            "dominance_rule_winner": false,
+            "extra_gate_penalty_applied": true
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ### Fallback example (strict avoidance)
 ```json
 {
@@ -158,9 +194,18 @@ Base: `/api/v1`
 | Field | Description |
 | --- | --- |
 | `fallback_used` | True when strict avoid rules were relaxed to return a route. |
+| `requested_avoid_strictness` / `applied_avoid_strictness` | Requested strictness and the strictness actually used for the returned route. |
 | `space_types` | Ordered list of space types in the returned path. |
 | `lowsec_count` / `nullsec_count` | Count of low-sec and null-sec systems in the path. |
 | `npc_station_ratio` | NPC station count divided by total systems in the route. |
+| `time_cost` | Normalized travel-time component (`gates + LY`, capped to 1.0). |
+| `risk_cost` | Normalized risk component derived from route security penalties. |
+| `preference_cost` | NPC preference component (`1 - npc_station_ratio`) when `prefer_npc_stations=true`; otherwise `0`. |
+| `npc_bonus` | Additional negative cost bonus applied when `prefer_npc_stations=true`. |
+| `weights_used` | Effective scoring weights (`w_time`, `w_risk`, `w_pref`) from `safety_vs_speed`. |
+| `penalties_bonuses` | Selection penalties/bonuses (`npc_bonus`, `selection_penalty`, `extra_gate_penalty`, cooldown cap penalty). |
+| `best_selection_reason` | Why the route type was chosen (normalized cost, dominance threshold, or extra-gate penalty path). |
+| `dominance_flags` | Selection diagnostics (`selected_as_best`, dominance-rule, and extra-gate penalty flags). |
 | `jump_waits` | Per-hop wait time estimates (minutes) before the next jump. |
 | `total_wait_minutes` | Sum of wait times across the jump chain. |
 | `wait_systems` | Systems where a wait is recommended before the next jump. |
