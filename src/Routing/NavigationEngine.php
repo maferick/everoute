@@ -55,6 +55,12 @@ final class NavigationEngine
     private array $jumpConstellationPortalsByRange = [];
     /** @var array<int, array<int, int[]>> */
     private array $jumpMidpointsByRange = [];
+    /** @var array<string, mixed> */
+    private array $lastHybridCandidateDebug = [];
+    /** @var array<string, mixed> */
+    private array $lastJumpNeighborDebug = [];
+    /** @var array<string, mixed> */
+    private array $lastJumpConnectivityDebug = [];
     private RiskScorer $riskScorer;
 
     public function __construct(
@@ -206,6 +212,9 @@ final class NavigationEngine
                 'hybrid_launch_candidates' => (int) ($hybridRoute['hybrid_launch_candidates'] ?? 0),
                 'hybrid_gate_budget_used' => (int) ($hybridRoute['hybrid_gate_budget_used'] ?? 0),
                 'hybrid_top_launch_candidates' => $hybridRoute['hybrid_top_launch_candidates'] ?? [],
+                'hybrid_candidate_debug' => $hybridRoute['hybrid_candidate_debug'] ?? $this->lastHybridCandidateDebug,
+                'jump_neighbor_debug' => $jumpRoute['jump_neighbor_debug'] ?? $this->lastJumpNeighborDebug,
+                'jump_connectivity' => $jumpRoute['jump_connectivity'] ?? $this->lastJumpConnectivityDebug,
                 'distance_checks_ly' => $this->distanceCheckMetrics(),
             ];
             if (isset($jumpRoute['debug']) && is_array($jumpRoute['debug'])) {
@@ -250,6 +259,75 @@ final class NavigationEngine
             ];
         }
         return $result;
+    }
+
+
+    /** @param array<int, int[]> $precomputed @param array<int, array<int, array{to:int,type:string,distance_ly:float}>> $generated */
+    private function dotlanWaypointEdgeDiagnostics(array $precomputed, array $generated, string $shipType, array $options, ?array $allowedSystems): array
+    {
+        $pairs = [
+            ['from' => 'Irmalin', 'to' => 'Chamemi'],
+            ['from' => 'Chamemi', 'to' => 'Liperer'],
+            ['from' => 'Liperer', 'to' => 'Murethand'],
+            ['from' => 'Murethand', 'to' => 'Siseide'],
+            ['from' => 'Siseide', 'to' => 'Amamake'],
+        ];
+
+        $results = [];
+        foreach ($pairs as $pair) {
+            $fromId = $this->systemIdByName($pair['from']);
+            $toId = $this->systemIdByName($pair['to']);
+            $key = $pair['from'] . '->' . $pair['to'];
+            if ($fromId === null || $toId === null) {
+                $results[$key] = [
+                    'distance_ly' => null,
+                    'within_range' => null,
+                    'was_edge_generated' => false,
+                    'reason' => 'system_not_found',
+                ];
+                continue;
+            }
+
+            $distance = JumpMath::distanceLy($this->systems[$fromId], $this->systems[$toId]);
+            $withinRange = in_array($toId, $precomputed[$fromId] ?? [], true);
+            $generatedEdge = false;
+            foreach ($generated[$fromId] ?? [] as $edge) {
+                if ((int) ($edge['to'] ?? 0) === $toId) {
+                    $generatedEdge = true;
+                    break;
+                }
+            }
+
+            $reason = 'generated';
+            if (!$withinRange) {
+                $reason = 'bucket_query_miss_or_out_of_range';
+            } elseif ($allowedSystems !== null && (!isset($allowedSystems[$fromId]) || !isset($allowedSystems[$toId]))) {
+                $reason = 'bounded_candidate_filter';
+            } elseif (!$generatedEdge) {
+                $fromReason = $this->jumpPolicyFilterReason($shipType, $this->systems[$fromId], false, $options);
+                $toReason = $this->jumpPolicyFilterReason($shipType, $this->systems[$toId], false, $options);
+                $reason = $fromReason ?? $toReason ?? 'filtered_other';
+            }
+
+            $results[$key] = [
+                'distance_ly' => round($distance, 6),
+                'within_range' => $withinRange,
+                'was_edge_generated' => $generatedEdge,
+                'reason' => $reason,
+            ];
+        }
+
+        return $results;
+    }
+
+    private function systemIdByName(string $name): ?int
+    {
+        foreach ($this->systems as $id => $system) {
+            if (($system['name'] ?? null) === $name) {
+                return (int) $id;
+            }
+        }
+        return null;
     }
 
     private function resolveShipType(array $options): string
@@ -573,6 +651,8 @@ final class NavigationEngine
 
         $boundedCandidates = $this->boundedJumpCandidateSet($startId, $endId, $rangeBucket);
         $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, $debugLogs, $boundedCandidates);
+        $this->lastJumpNeighborDebug = $graph['debug'] ?? [];
+        $dotlanEdgeChecks = $this->dotlanWaypointEdgeDiagnostics($neighbors, $graph['neighbors'], $shipType, $options, $boundedCandidates);
         if ($debugLogs && $graph['debug_sample'] !== []) {
             $this->logger->debug('Jump neighbor sample', [
                 'bucket' => $rangeBucket,
@@ -600,6 +680,10 @@ final class NavigationEngine
         };
         $result = $this->findJumpPathByDominance($graph['neighbors'], $startId, $endId, $options);
 
+        $connectivity = $this->traceJumpGraphConnectivity($graph['neighbors'], $startId, $endId, 10);
+        $connectivity['dotlan_waypoint_edge_checks'] = $dotlanEdgeChecks;
+        $this->lastJumpConnectivityDebug = $connectivity;
+
         if ($result['path'] === [] || ($result['path'][count($result['path']) - 1] ?? null) !== $endId) {
             if ($debugLogs) {
                 $this->runJumpDiagnostics($startId, $endId, $shipType, $options, $rangeBucket);
@@ -609,7 +693,10 @@ final class NavigationEngine
                 'reason' => 'No jump route found.',
                 'nodes_explored' => $result['nodes_explored'],
                 'illegal_systems_filtered' => $graph['filtered'],
+                'min_hops_found' => $result['min_hops_found'] ?? null,
                 'debug' => $originDiagnostics,
+                'jump_neighbor_debug' => $graph['debug'] ?? [],
+                'jump_connectivity' => $connectivity,
             ];
         }
 
@@ -628,6 +715,7 @@ final class NavigationEngine
         }
 
         $summary = $this->buildJumpRouteSummary($segments, (float) $result['distance'], (int) $result['nodes_explored'], (int) $graph['filtered'], $options);
+        $summary['min_hops_found'] = $result['min_hops_found'] ?? null;
 
         $npcFallbackDebug = [
             'triggered' => false,
@@ -668,6 +756,8 @@ final class NavigationEngine
 
         $summary['debug'] = $originDiagnostics;
         $summary['debug']['npc_fallback'] = $npcFallbackDebug;
+        $summary['jump_neighbor_debug'] = $graph['debug'] ?? [];
+        $summary['jump_connectivity'] = $connectivity;
         return $summary;
     }
 
@@ -686,25 +776,28 @@ final class NavigationEngine
     /** @param array<int, array<int, array{to:int,type:string,distance_ly:float}>> $neighbors */
     private function findJumpPathByDominance(array $neighbors, int $startId, int $endId, array $options): array
     {
-        $queue = new \SplQueue();
-        $queue->enqueue($startId);
+        $queue = new \SplPriorityQueue();
+        $queue->setExtractFlags(\SplPriorityQueue::EXTR_DATA);
 
         $state = [
             $startId => [
                 'hops' => 0,
                 'distance' => 0.0,
                 'max_hop' => 0.0,
+                'risk' => 0.0,
                 'prev' => null,
             ],
         ];
+        $queue->insert($startId, [0, 0.0, 0.0, 0.0]);
 
         $nodesExplored = 0;
-        $dominanceEnabled = !array_key_exists('dominance_rule_enabled', $options) || !empty($options['dominance_rule_enabled']);
-
         while (!$queue->isEmpty()) {
-            $node = (int) $queue->dequeue();
+            $node = (int) $queue->extract();
+            $current = $state[$node] ?? null;
+            if ($current === null) {
+                continue;
+            }
             $nodesExplored++;
-            $current = $state[$node];
 
             foreach ($neighbors[$node] ?? [] as $edge) {
                 $to = (int) ($edge['to'] ?? 0);
@@ -712,45 +805,36 @@ final class NavigationEngine
                     continue;
                 }
                 $edgeDistance = (float) ($edge['distance_ly'] ?? 0.0);
+                $profile = $this->baseCostProfiles[$to] ?? null;
+                $riskPenalty = (float) ($profile['risk_penalty'] ?? 0.0);
                 $candidate = [
                     'hops' => (int) $current['hops'] + 1,
                     'distance' => (float) $current['distance'] + $edgeDistance,
                     'max_hop' => max((float) $current['max_hop'], $edgeDistance),
+                    'risk' => (float) $current['risk'] + $riskPenalty,
                     'prev' => $node,
                 ];
 
                 $existing = $state[$to] ?? null;
-                $better = false;
-                if ($existing === null) {
-                    $better = true;
-                } elseif ($dominanceEnabled) {
-                    if ((int) $candidate['hops'] < (int) $existing['hops']) {
-                        $better = true;
-                    } elseif ((int) $candidate['hops'] === (int) $existing['hops']) {
-                        if ((float) $candidate['distance'] < (float) $existing['distance'] - 1e-9) {
-                            $better = true;
-                        } elseif (abs((float) $candidate['distance'] - (float) $existing['distance']) <= 1e-9
-                            && (float) $candidate['max_hop'] < (float) $existing['max_hop'] - 1e-9) {
-                            $better = true;
-                        }
-                    }
-                } else {
-                    if ((float) $candidate['distance'] < (float) $existing['distance'] - 1e-9) {
-                        $better = true;
-                    }
-                }
-
-                if (!$better) {
+                if ($existing !== null && !$this->isJumpCandidateBetter($candidate, $existing)) {
                     continue;
                 }
 
                 $state[$to] = $candidate;
-                $queue->enqueue($to);
+                $queue->insert(
+                    $to,
+                    [
+                        -((int) $candidate['hops']),
+                        -((float) $candidate['distance']),
+                        -((float) $candidate['max_hop']),
+                        -((float) $candidate['risk']),
+                    ]
+                );
             }
         }
 
         if (!isset($state[$endId])) {
-            return ['path' => [], 'edges' => [], 'distance' => INF, 'nodes_explored' => $nodesExplored];
+            return ['path' => [], 'edges' => [], 'distance' => INF, 'nodes_explored' => $nodesExplored, 'min_hops_found' => null];
         }
 
         $path = [];
@@ -779,7 +863,25 @@ final class NavigationEngine
             'edges' => $edges,
             'distance' => (float) ($state[$endId]['distance'] ?? INF),
             'nodes_explored' => $nodesExplored,
+            'min_hops_found' => (int) ($state[$endId]['hops'] ?? 0),
         ];
+    }
+
+    /** @param array{hops:int,distance:float,max_hop:float,risk:float} $candidate @param array{hops:int,distance:float,max_hop:float,risk:float} $existing */
+    private function isJumpCandidateBetter(array $candidate, array $existing): bool
+    {
+        $tolerance = 1e-9;
+        if ((int) $candidate['hops'] !== (int) $existing['hops']) {
+            return (int) $candidate['hops'] < (int) $existing['hops'];
+        }
+        if (abs((float) $candidate['distance'] - (float) $existing['distance']) > $tolerance) {
+            return (float) $candidate['distance'] < (float) $existing['distance'];
+        }
+        if (abs((float) $candidate['max_hop'] - (float) $existing['max_hop']) > $tolerance) {
+            return (float) $candidate['max_hop'] < (float) $existing['max_hop'];
+        }
+
+        return (float) $candidate['risk'] < (float) $existing['risk'] - $tolerance;
     }
 
     private function npcFallbackCoverageThreshold(array $options): float
@@ -1232,6 +1334,7 @@ final class NavigationEngine
         $hopsFromStart = $this->buildGateHopMap($startId, $shipType, $options, $this->adjacency);
         $baselineGateHops = $hopsToEnd[$startId] ?? null;
 
+
         $launchCandidates = $this->buildHybridLaunchCandidates(
             $startId,
             $endId,
@@ -1241,7 +1344,8 @@ final class NavigationEngine
             $launchCandidateLimit,
             $hopsToEnd,
             $baselineGateHops,
-            $minSegmentBenefitHops
+            $minSegmentBenefitHops,
+            $jumpNeighbors
         );
         if ($launchCandidates === []) {
             return [
@@ -1251,6 +1355,7 @@ final class NavigationEngine
                 'illegal_systems_filtered' => 0,
                 'hybrid_launch_candidates' => 0,
                 'hybrid_gate_budget_used' => $launchHopLimit,
+                'hybrid_candidate_debug' => $this->lastHybridCandidateDebug,
             ];
         }
 
@@ -1427,6 +1532,7 @@ final class NavigationEngine
                 'reason' => $stopReason !== '' ? $stopReason : 'No hybrid route found.',
                 'nodes_explored' => $nodesExplored,
                 'illegal_systems_filtered' => 0,
+                'hybrid_candidate_debug' => $this->lastHybridCandidateDebug,
             ];
         }
 
@@ -1450,6 +1556,7 @@ final class NavigationEngine
             ];
         }, $launchCandidates), 0, 5);
         $bestPlan['hybrid_top_launch_candidates'] = $topLaunch;
+        $bestPlan['hybrid_candidate_debug'] = $this->lastHybridCandidateDebug;
         $bestPlan['hybrid_explainability']['baseline_comparison'] = $bestPlan['baseline_time_costs'];
 
         if (is_finite($gateTimeCost) && ($gateTimeCost - $hybridTimeCost) < $minHybridSelectionImprovement) {
@@ -1878,6 +1985,16 @@ final class NavigationEngine
         $debugSample = [];
         $sampleLimit = $debugLogs ? 6 : 0;
         $sampled = 0;
+        $policyReasons = [
+            'filtered_illegal_security' => 0,
+            'filtered_avoid_list' => 0,
+            'filtered_other' => 0,
+        ];
+        $rawCount = 0;
+        $policyCount = 0;
+        $rangeCount = 0;
+        $cappedCount = 0;
+
         foreach ($precomputed as $from => $toList) {
             if (!isset($this->systems[$from])) {
                 continue;
@@ -1885,25 +2002,36 @@ final class NavigationEngine
             if ($allowedSystems !== null && !isset($allowedSystems[(int) $from])) {
                 continue;
             }
+
             $fromIsMidpoint = $from !== $startId && $from !== $endId;
-            if (!$this->isSystemAllowedForJumpChain($shipType, $this->systems[$from], $fromIsMidpoint, $options)) {
+            $fromReason = $this->jumpPolicyFilterReason($shipType, $this->systems[$from], $fromIsMidpoint, $options);
+            if ($fromReason !== null) {
                 $filtered++;
+                $policyReasons[$fromReason] = ($policyReasons[$fromReason] ?? 0) + 1;
                 continue;
             }
+
             $filteredForNode = 0;
             foreach ($toList as $to) {
+                $rawCount++;
                 if (!isset($this->systems[$to])) {
                     continue;
                 }
                 if ($allowedSystems !== null && !isset($allowedSystems[(int) $to])) {
                     continue;
                 }
+                $rangeCount++;
+
                 $toIsMidpoint = $to !== $startId && $to !== $endId;
-                if (!$this->isSystemAllowedForJumpChain($shipType, $this->systems[$to], $toIsMidpoint, $options)) {
+                $reason = $this->jumpPolicyFilterReason($shipType, $this->systems[$to], $toIsMidpoint, $options);
+                if ($reason !== null) {
                     $filtered++;
                     $filteredForNode++;
+                    $policyReasons[$reason] = ($policyReasons[$reason] ?? 0) + 1;
                     continue;
                 }
+                $policyCount++;
+
                 $neighbors[$from][] = [
                     'to' => $to,
                     'type' => 'jump',
@@ -1928,7 +2056,18 @@ final class NavigationEngine
             }
         }
 
-        return ['neighbors' => $neighbors, 'filtered' => $filtered, 'debug_sample' => $debugSample];
+        return [
+            'neighbors' => $neighbors,
+            'filtered' => $filtered,
+            'debug_sample' => $debugSample,
+            'debug' => [
+                'jump_neighbors_raw_count' => $rawCount,
+                'jump_neighbors_after_range_count' => $rangeCount,
+                'jump_neighbors_after_policy_count' => $policyCount,
+                'jump_neighbors_capped_by_limit_count' => $cappedCount,
+                'policy_filter_reasons_count' => $policyReasons,
+            ],
+        ];
     }
 
     /** @param array<int, array<int, array<string, mixed>>> $gate */
@@ -2792,6 +2931,75 @@ final class NavigationEngine
         return true;
     }
 
+    private function jumpPolicyFilterReason(string $shipType, array $system, bool $isMidpoint, array $options): ?string
+    {
+        if ($this->isPochvenSystem($system)) {
+            return 'filtered_illegal_security';
+        }
+
+        $useNavSecurity = $this->isCapitalShipType($shipType);
+        $security = $this->systemSecurityForNav($system, $useNavSecurity);
+
+        if ($useNavSecurity) {
+            if ($security >= SecurityNav::HIGH_SEC_MIN) {
+                return 'filtered_illegal_security';
+            }
+        } elseif (!$this->shipRules->isSystemAllowed($shipType, $system, $isMidpoint)) {
+            return 'filtered_illegal_security';
+        }
+
+        if ($isMidpoint) {
+            if ($this->shouldFilterAvoidedSpace($options)) {
+                if (!empty($options['avoid_nullsec']) && $security < SecurityNav::LOW_SEC_MIN) {
+                    return 'filtered_illegal_security';
+                }
+                if (!empty($options['avoid_lowsec']) && $security >= SecurityNav::LOW_SEC_MIN && $security < SecurityNav::HIGH_SEC_MIN) {
+                    return 'filtered_illegal_security';
+                }
+            }
+            if (!empty($options['avoid_systems']) && in_array($system['name'], (array) $options['avoid_systems'], true)) {
+                return 'filtered_avoid_list';
+            }
+        }
+
+        return null;
+    }
+
+    /** @param array<int, array<int, array{to:int,type:string,distance_ly:float}>> $neighbors */
+    private function traceJumpGraphConnectivity(array $neighbors, int $startId, int $endId, int $maxHops = 10): array
+    {
+        $queue = new \SplQueue();
+        $queue->enqueue([$startId, 0]);
+        $seen = [$startId => true];
+        $minHopsFound = null;
+
+        while (!$queue->isEmpty()) {
+            [$node, $depth] = $queue->dequeue();
+            if ($depth > $maxHops) {
+                continue;
+            }
+            if ($node === $endId) {
+                $minHopsFound = $depth;
+                break;
+            }
+            foreach ($neighbors[$node] ?? [] as $edge) {
+                $to = (int) ($edge['to'] ?? 0);
+                if ($to === 0 || isset($seen[$to])) {
+                    continue;
+                }
+                $seen[$to] = true;
+                $queue->enqueue([$to, $depth + 1]);
+            }
+        }
+
+        return [
+            'reachable_within_max_hops' => $minHopsFound !== null,
+            'min_hops_found' => $minHopsFound,
+            'number_of_nodes_seen' => count($seen),
+            'max_hops_evaluated' => $maxHops,
+        ];
+    }
+
     private function isPochvenSystem(array $system): bool
     {
         $spaceType = strtolower((string) ($system['space_type'] ?? $system['space'] ?? $system['region_type'] ?? ''));
@@ -2866,13 +3074,17 @@ final class NavigationEngine
     /**
      * @return array<int, array{
      *   system_id: int,
+     *   system_name: string,
      *   gate_hops: int,
      *   gate_path: int[],
+     *   gate_path_cost: float,
      *   score: float,
      *   distance_ly: float,
      *   risk_score: float,
      *   regional_gate_count: int,
      *   npc_bonus: float,
+     *   has_npc_station: bool,
+     *   strict_legal: bool,
      *   reason: string,
      *   choice_details: array<string, mixed>
      * }>
@@ -2886,119 +3098,178 @@ final class NavigationEngine
         int $limit,
         array $hopsToEnd,
         ?int $baselineGateHops,
-        int $minSegmentBenefitHops
+        int $minSegmentBenefitHops,
+        ?array $jumpNeighbors = null
     ): array {
         $startSystem = $this->systems[$startId] ?? null;
         $endSystem = $this->systems[$endId] ?? null;
         if ($startSystem === null || $endSystem === null) {
+            $this->lastHybridCandidateDebug = [];
             return [];
         }
 
-        $paths = $this->gatePathsWithinHops(
-            $startId,
-            $maxHops,
-            function (int $systemId, bool $asMidpoint) use ($shipType, $options): bool {
-                $system = $this->systems[$systemId] ?? null;
-                if ($system === null) {
-                    return false;
+        $queue = new \SplQueue();
+        $queue->enqueue($startId);
+        $hops = [$startId => 0];
+        $prev = [$startId => null];
+        $frontierPerDepth = [1];
+        $debug = [
+            'bfs_visited_total' => 0,
+            'bfs_depth_reached' => 0,
+            'bfs_frontier_count_per_depth' => $frontierPerDepth,
+            'candidates_considered_total' => 0,
+            'candidates_returned_total' => 0,
+            'filter_reasons_count' => [
+                'filtered_illegal_security' => 0,
+                'filtered_avoid_list' => 0,
+                'filtered_missing_station' => 0,
+                'filtered_no_jump_neighbors' => 0,
+                'filtered_other' => 0,
+            ],
+            'strict_pass_count' => 0,
+            'soft_pass_count' => 0,
+            'top_candidates' => [],
+        ];
+
+        while (!$queue->isEmpty()) {
+            $current = (int) $queue->dequeue();
+            $depth = (int) ($hops[$current] ?? 0);
+            $debug['bfs_visited_total']++;
+            if ($depth >= $maxHops) {
+                continue;
+            }
+            foreach ($this->adjacency[$current] ?? [] as $edge) {
+                $neighbor = (int) ($edge['to'] ?? 0);
+                if ($neighbor === 0 || isset($hops[$neighbor])) {
+                    continue;
                 }
-                return $this->isSystemAllowedForRoute($shipType, $system, $asMidpoint, $options);
-            },
-            $this->adjacency
-        );
+                $neighborHops = $depth + 1;
+                $hops[$neighbor] = $neighborHops;
+                $prev[$neighbor] = $current;
+                $frontierPerDepth[$neighborHops] = ($frontierPerDepth[$neighborHops] ?? 0) + 1;
+                $debug['bfs_depth_reached'] = max((int) $debug['bfs_depth_reached'], $neighborHops);
+                $queue->enqueue($neighbor);
+            }
+        }
+
+        $debug['bfs_frontier_count_per_depth'] = array_values($frontierPerDepth);
 
         $candidates = [];
         $riskWeight = $this->riskWeight($options);
-        foreach ($paths['hops'] as $systemId => $hops) {
+        foreach ($hops as $systemId => $gateHops) {
             if (!isset($this->systems[$systemId])) {
                 continue;
             }
+            $debug['candidates_considered_total']++;
             $system = $this->systems[$systemId];
             $profile = $this->baseCostProfiles[$systemId] ?? null;
             if ($profile === null) {
+                $debug['filter_reasons_count']['filtered_other']++;
                 continue;
             }
-            if (!$this->isSystemAllowedForRoute($shipType, $system, false, $options)) {
+
+            $strictReason = $this->jumpPolicyFilterReason($shipType, $system, false, $options);
+            $strictLegal = $strictReason === null;
+            if (!$strictLegal && $strictReason === 'filtered_avoid_list') {
+                $debug['filter_reasons_count']['filtered_avoid_list']++;
                 continue;
             }
+            if ($strictLegal) {
+                $debug['strict_pass_count']++;
+            } else {
+                $debug['soft_pass_count']++;
+            }
+
+            if ($jumpNeighbors !== null && count($jumpNeighbors[$systemId] ?? []) < 1) {
+                $debug['filter_reasons_count']['filtered_no_jump_neighbors']++;
+                continue;
+            }
+
             $distance = JumpMath::distanceLy($system, $endSystem);
-            $riskScore = $profile['risk_penalty'];
+            $riskScore = (float) $profile['risk_penalty'];
             $regionalGateCount = 0;
             foreach ($this->adjacency[$systemId] ?? [] as $edge) {
                 if (!empty($edge['is_regional_gate'])) {
                     $regionalGateCount++;
                 }
             }
-            $regionalGateDistance = $system['regional_gate_distance'] ?? null;
-            $regionalGateScore = 0.0;
-            if (is_int($regionalGateDistance)) {
-                if ($regionalGateDistance === 0) {
-                    $regionalGateScore = 1.0;
-                } elseif ($regionalGateDistance === 1) {
-                    $regionalGateScore = 0.5;
-                }
-            }
             $npcBonus = $this->npcStationStepBonus($system, $options);
             $estimatedJumpCooldown = $this->estimateJumpCooldownMinutes($shipType, $distance);
-            $score = $hops
+            $legalPenalty = $strictLegal ? 0.0 : 1000.0;
+            $score = $gateHops
                 + $distance
                 + $estimatedJumpCooldown
                 + ($riskScore * $riskWeight)
                 - ($regionalGateCount * 0.3)
-                - ($regionalGateScore * 0.4)
-                + $npcBonus;
-            $gatePath = $this->buildGatePathFromPrev($paths['prev'], $systemId);
+                + $npcBonus
+                + $legalPenalty;
+
+            $gatePath = $this->buildGatePathFromPrev($prev, (int) $systemId);
             $remainingGateHops = $hopsToEnd[$systemId] ?? null;
+            $benefitHops = null;
             if ($baselineGateHops !== null && $remainingGateHops !== null) {
-                $segmentBenefit = $baselineGateHops - ((int) $hops + (int) $remainingGateHops);
-                if ($segmentBenefit < $minSegmentBenefitHops) {
+                $benefitHops = $baselineGateHops - ((int) $gateHops + (int) $remainingGateHops);
+                if ($benefitHops < $minSegmentBenefitHops) {
+                    $debug['filter_reasons_count']['filtered_other']++;
                     continue;
                 }
             }
-
-            $reason = sprintf(
-                'Launch candidate scored %.2f (%.1f LY to destination, %d gate hops, %d regional gates, regional gate score %.1f, risk %.2f).',
-                $score,
-                $distance,
-                $hops,
-                $regionalGateCount,
-                $regionalGateScore,
-                $riskScore
-            );
 
             $choiceDetails = [
                 'score' => round($score, 3),
                 'distance_to_destination_ly' => round($distance, 2),
                 'risk_score' => round($riskScore, 2),
-                'regional_gate_count' => $regionalGateCount,
-                'regional_gate_score' => round($regionalGateScore, 2),
-                'npc_bonus' => round($npcBonus, 2),
-                'gate_hops' => $hops,
-                'estimated_jump_cooldown_minutes' => round($estimatedJumpCooldown, 2),
-                'projected_gate_progress_hops' => $baselineGateHops !== null && $remainingGateHops !== null
-                    ? max(0, $baselineGateHops - (int) $remainingGateHops)
-                    : null,
+                'gate_hops' => (int) $gateHops,
+                'strict_legal' => $strictLegal,
+                'has_npc_station' => !empty($system['has_npc_station']) || (int) ($system['npc_station_count'] ?? 0) > 0,
+                'projected_gate_progress_hops' => $benefitHops,
             ];
 
             $candidates[] = [
                 'system_id' => (int) $systemId,
-                'gate_hops' => (int) $hops,
+                'system_name' => (string) ($system['name'] ?? (string) $systemId),
+                'gate_hops' => (int) $gateHops,
                 'gate_path' => $gatePath,
-                'score' => $score,
-                'distance_ly' => $distance,
-                'risk_score' => $riskScore,
-                'regional_gate_count' => $regionalGateCount,
-                'npc_bonus' => $npcBonus,
-                'reason' => $reason,
+                'gate_path_cost' => (float) $gateHops,
+                'score' => (float) $score,
+                'distance_ly' => (float) $distance,
+                'risk_score' => (float) $riskScore,
+                'regional_gate_count' => (int) $regionalGateCount,
+                'npc_bonus' => (float) $npcBonus,
+                'has_npc_station' => (bool) $choiceDetails['has_npc_station'],
+                'strict_legal' => $strictLegal,
+                'reason' => $strictLegal ? 'strict_pass' : 'soft_pass_with_penalty',
                 'choice_details' => $choiceDetails,
             ];
         }
 
         usort($candidates, function (array $a, array $b): int {
-            return $a['score'] <=> $b['score'];
+            if ((int) $a['gate_hops'] !== (int) $b['gate_hops']) {
+                return (int) $a['gate_hops'] <=> (int) $b['gate_hops'];
+            }
+            if (abs((float) $a['risk_score'] - (float) $b['risk_score']) > 1e-9) {
+                return (float) $a['risk_score'] <=> (float) $b['risk_score'];
+            }
+            return (float) $a['score'] <=> (float) $b['score'];
         });
 
-        return array_slice($candidates, 0, $limit);
+        $selected = array_slice($candidates, 0, $limit);
+        $debug['candidates_returned_total'] = count($selected);
+        $debug['top_candidates'] = array_slice(array_map(static function (array $candidate): array {
+            return [
+                'system_id' => (int) $candidate['system_id'],
+                'system_name' => (string) $candidate['system_name'],
+                'gate_depth' => (int) $candidate['gate_hops'],
+                'gate_path_cost' => (float) $candidate['gate_path_cost'],
+                'risk_score' => round((float) $candidate['risk_score'], 2),
+                'strict_legal' => (bool) $candidate['strict_legal'],
+                'has_npc_station' => (bool) $candidate['has_npc_station'],
+            ];
+        }, $selected), 0, 10);
+
+        $this->lastHybridCandidateDebug = $debug;
+
+        return $selected;
     }
 
     /**

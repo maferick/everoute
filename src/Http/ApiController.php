@@ -184,6 +184,48 @@ final class ApiController
         return new JsonResponse(['distances' => $payload]);
     }
 
+
+    public function jumpGraphDiagnostics(Request $request): Response
+    {
+        $from = $this->validator->string($request->query['from'] ?? '1-SMEB') ?? '1-SMEB';
+        $to = $this->validator->string($request->query['to'] ?? 'Amamake') ?? 'Amamake';
+        $jumpShipType = $this->validator->string($request->query['jump_ship_type'] ?? 'carrier') ?? 'carrier';
+        $jumpSkillLevel = $this->validator->int($request->query['jump_skill_level'] ?? null, 0, 5, 5);
+        $gateBudget = $this->validator->int($request->query['hybrid_gate_budget_max'] ?? null, 0, 12, 8);
+
+        $result = $this->routes->computeRoutes([
+            'from' => $from,
+            'to' => $to,
+            'mode' => 'capital',
+            'ship_class' => 'capital',
+            'jump_ship_type' => $jumpShipType,
+            'jump_skill_level' => $jumpSkillLevel,
+            'allow_gate_reposition' => true,
+            'hybrid_gate_budget_max' => $gateBudget,
+            'hybrid_mixed_graph' => false,
+            'debug' => true,
+            'prefer_npc' => false,
+            'prefer_npc_stations' => false,
+        ]);
+
+        $debug = is_array($result['debug'] ?? null) ? $result['debug'] : [];
+        $jumpRoute = is_array($result['jump_route'] ?? null) ? $result['jump_route'] : [];
+        $hybridRoute = is_array($result['hybrid_route'] ?? null) ? $result['hybrid_route'] : [];
+
+        return new JsonResponse([
+            'from' => $from,
+            'to' => $to,
+            'jump_ship_type' => $jumpShipType,
+            'jump_skill_level' => $jumpSkillLevel,
+            'hybrid_gate_budget_max' => $gateBudget,
+            'min_hops_found' => $jumpRoute['min_hops_found'] ?? ($debug['jump_connectivity']['min_hops_found'] ?? null),
+            'jump_connectivity' => $debug['jump_connectivity'] ?? ($jumpRoute['jump_connectivity'] ?? []),
+            'jump_neighbor_debug' => $debug['jump_neighbor_debug'] ?? ($jumpRoute['jump_neighbor_debug'] ?? []),
+            'hybrid_candidate_debug' => $debug['hybrid_candidate_debug'] ?? ($hybridRoute['hybrid_candidate_debug'] ?? []),
+            'hybrid_launch_candidates' => $debug['hybrid_launch_candidates'] ?? ($hybridRoute['hybrid_launch_candidates'] ?? 0),
+        ]);
+    }
+
     public function systemSearch(Request $request): Response
     {
         if (!$this->rateLimiter->allow('systems:' . $request->ip)) {
