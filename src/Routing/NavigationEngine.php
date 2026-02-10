@@ -24,6 +24,17 @@ final class NavigationEngine
     private array $adjacency = [];
     /** @var array<int, array<int, array{to: int, is_regional_gate: bool}>> */
     private array $reverseAdjacency = [];
+    /**
+     * @var array<int, array{
+     *     risk_penalty: float,
+     *     security: float,
+     *     security_penalty: float,
+     *     security_class: string,
+     *     has_npc_station: bool,
+     *     npc_station_count: int
+     * }>
+     */
+    private array $baseCostProfiles = [];
     private RiskScorer $riskScorer;
 
     public function __construct(
@@ -226,20 +237,20 @@ final class NavigationEngine
             $startId,
             $endId,
             function (int $from, int $to) use ($useSubcapPolicy, $preference, $options): float {
-                $system = $this->systems[$to] ?? null;
-                if ($system === null) {
+                $profile = $this->baseCostProfiles[$to] ?? null;
+                if ($profile === null) {
                     return INF;
                 }
                 if ($useSubcapPolicy) {
-                    return $this->gateStepCost($preference, $system)
-                        + $this->npcStationBonus($system, $options)
-                        + $this->avoidPenalty($system, $options);
+                    return $this->gateStepCost($preference, $profile)
+                        + $this->npcStationBonus($profile, $options)
+                        + $this->avoidPenalty($profile, $options);
                 }
-                $riskScore = $this->riskScore($to);
+                $riskScore = $profile['risk_penalty'];
                 return 1.0
                     + ($riskScore * $this->riskWeightCache)
-                    + $this->npcStationBonus($system, $options)
-                    + $this->avoidPenalty($system, $options);
+                    + $this->npcStationBonus($profile, $options)
+                    + $this->avoidPenalty($profile, $options);
             },
             null,
             $useSubcapPolicy ? $policy['allowed'] : null,
@@ -385,20 +396,20 @@ final class NavigationEngine
             $startId,
             $endId,
             function (int $from, int $to, mixed $edgeData) use ($options, $shipType): float {
-                $system = $this->systems[$to] ?? null;
-                if ($system === null) {
+                $profile = $this->baseCostProfiles[$to] ?? null;
+                if ($profile === null) {
                     return INF;
                 }
                 $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
                 $metrics = $this->fatigueModel->lookupHopMetricsForShipType($shipType, $distance);
                 $fatigue = $metrics['jump_fatigue_minutes'];
                 $cooldown = $metrics['jump_activation_minutes'];
-                $riskScore = $this->riskScore($to);
+                $riskScore = $profile['risk_penalty'];
                 return $distance
                     + $fatigue
                     + $cooldown
                     + ($riskScore * $this->riskWeightCache)
-                    + $this->avoidPenalty($system, $options);
+                    + $this->avoidPenalty($profile, $options);
             },
             null,
             null,
@@ -578,18 +589,18 @@ final class NavigationEngine
                     $launchId,
                     $landingId,
                     function (int $from, int $to, mixed $edgeData) use ($options, $shipType): float {
-                        $system = $this->systems[$to] ?? null;
-                        if ($system === null) {
+                        $profile = $this->baseCostProfiles[$to] ?? null;
+                        if ($profile === null) {
                             return INF;
                         }
                         $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
                         $cooldown = $this->estimateJumpCooldownMinutes($shipType, $distance);
-                        $riskScore = $this->riskScore($to);
+                        $riskScore = $profile['risk_penalty'];
                         return $distance
                             + $cooldown
                             + ($riskScore * $this->riskWeightCache)
-                            + $this->npcStationBonus($system, $options)
-                            + $this->avoidPenalty($system, $options);
+                            + $this->npcStationBonus($profile, $options)
+                            + $this->avoidPenalty($profile, $options);
                     },
                     function (int $node) use ($shipType, $options): bool {
                         $system = $this->systems[$node] ?? null;
@@ -808,13 +819,13 @@ final class NavigationEngine
         return in_array($preference, ['shorter', 'safer', 'less_secure'], true) ? $preference : 'shorter';
     }
 
-    private function gateStepCost(string $preference, array $system): float
+    private function gateStepCost(string $preference, array $profile): float
     {
         if ($preference === 'shorter') {
             return 1.0;
         }
-        $security = (float) ($system['security'] ?? 0.0);
-        $penalty = exp(0.15 * $this->securityPenalty($security));
+        $security = $profile['security'];
+        $penalty = exp(0.15 * $profile['security_penalty']);
 
         if ($preference === 'safer') {
             if ($security <= 0.0) {
@@ -841,14 +852,14 @@ final class NavigationEngine
         return max(0.0, min(100.0, $penalty));
     }
 
-    private function npcStationBonus(array $system, array $options): float
+    private function npcStationBonus(array $profile, array $options): float
     {
         if (empty($options['prefer_npc'])) {
             return 0.0;
         }
 
-        $npcCount = (int) ($system['npc_station_count'] ?? 0);
-        $hasNpcStation = !empty($system['has_npc_station']) || $npcCount > 0;
+        $npcCount = $profile['npc_station_count'];
+        $hasNpcStation = $profile['has_npc_station'];
 
         if (!$hasNpcStation) {
             return 0.0;
@@ -964,14 +975,14 @@ final class NavigationEngine
         return $result;
     }
 
-    private function avoidPenalty(array $system, array $options): float
+    private function avoidPenalty(array $profile, array $options): float
     {
-        $security = (float) ($system['security'] ?? 0.0);
         $penalty = 0.0;
-        if (!empty($options['avoid_nullsec']) && $security < 0.1) {
+        $securityClass = $profile['security_class'];
+        if (!empty($options['avoid_nullsec']) && $securityClass === 'null') {
             $penalty += 2.5;
         }
-        if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
+        if (!empty($options['avoid_lowsec']) && $securityClass === 'low') {
             $penalty += 1.5;
         }
         return $penalty;
@@ -1025,20 +1036,20 @@ final class NavigationEngine
                 $startId,
                 $endId,
                 function (int $from, int $to, mixed $edgeData) use ($options, $shipType): float {
-                    $system = $this->systems[$to] ?? null;
-                    if ($system === null) {
+                    $profile = $this->baseCostProfiles[$to] ?? null;
+                    if ($profile === null) {
                         return INF;
                     }
                     $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
                     $metrics = $this->fatigueModel->lookupHopMetricsForShipType($shipType, $distance);
                     $fatigue = $metrics['jump_fatigue_minutes'];
                     $cooldown = $metrics['jump_activation_minutes'];
-                    $riskScore = $this->riskScore($to);
+                    $riskScore = $profile['risk_penalty'];
                     return $distance
                         + $fatigue
                         + $cooldown
                         + ($riskScore * $this->riskWeightCache)
-                        + $this->avoidPenalty($system, $options);
+                        + $this->avoidPenalty($profile, $options);
                 },
                 null,
                 null,
@@ -1493,6 +1504,10 @@ final class NavigationEngine
     private function riskScore(int $systemId): float
     {
         $risk = $this->risk[$systemId] ?? [];
+        $profile = $this->baseCostProfiles[$systemId] ?? null;
+        if ($profile !== null) {
+            return $profile['risk_penalty'];
+        }
         return $this->riskScorer->penalty($risk);
     }
 
@@ -1631,11 +1646,15 @@ final class NavigationEngine
                 continue;
             }
             $system = $this->systems[$systemId];
+            $profile = $this->baseCostProfiles[$systemId] ?? null;
+            if ($profile === null) {
+                continue;
+            }
             if (!$this->isSystemAllowedForRoute($shipType, $system, false, $options)) {
                 continue;
             }
             $distance = JumpMath::distanceLy($system, $endSystem);
-            $riskScore = $this->riskScore($systemId);
+            $riskScore = $profile['risk_penalty'];
             $regionalGateCount = 0;
             foreach ($this->adjacency[$systemId] ?? [] as $edge) {
                 if (!empty($edge['is_regional_gate'])) {
@@ -2085,5 +2104,36 @@ final class NavigationEngine
         foreach ($riskRows as $row) {
             $this->risk[(int) $row['system_id']] = $row;
         }
+
+        $this->buildBaseCostProfiles();
+    }
+
+    private function buildBaseCostProfiles(): void
+    {
+        $this->baseCostProfiles = [];
+        foreach ($this->systems as $id => $system) {
+            $security = (float) ($system['security'] ?? 0.0);
+            $npcCount = (int) ($system['npc_station_count'] ?? 0);
+            $hasNpcStation = !empty($system['has_npc_station']) || $npcCount > 0;
+            $this->baseCostProfiles[(int) $id] = [
+                'risk_penalty' => $this->riskScorer->penalty($this->risk[(int) $id] ?? []),
+                'security' => $security,
+                'security_penalty' => $this->securityPenalty($security),
+                'security_class' => $this->securityClass($security),
+                'has_npc_station' => $hasNpcStation,
+                'npc_station_count' => $npcCount,
+            ];
+        }
+    }
+
+    private function securityClass(float $security): string
+    {
+        if ($security < 0.1) {
+            return 'null';
+        }
+        if ($security < 0.5) {
+            return 'low';
+        }
+        return 'high';
     }
 }
