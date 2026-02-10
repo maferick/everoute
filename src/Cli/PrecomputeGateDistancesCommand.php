@@ -26,7 +26,8 @@ final class PrecomputeGateDistancesCommand extends Command
             ->addOption('resume', null, InputOption::VALUE_NONE, 'Resume from last checkpoint')
             ->addOption('sleep', null, InputOption::VALUE_REQUIRED, 'Sleep seconds between sources', '0')
             ->addOption('source-ids', null, InputOption::VALUE_REQUIRED, 'Comma-separated list of source system IDs to process')
-            ->addOption('include-wormholes', null, InputOption::VALUE_NONE, 'Include wormhole and non-normal-universe systems');
+            ->addOption('include-wormholes', null, InputOption::VALUE_NONE, 'Include wormhole and non-normal-universe systems')
+            ->addOption('build-id', null, InputOption::VALUE_REQUIRED, 'Optional build id for shadow-table writes');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -37,19 +38,22 @@ final class PrecomputeGateDistancesCommand extends Command
         $sleepSeconds = (float) $input->getOption('sleep');
         $sourceIds = $this->parseIdList((string) $input->getOption('source-ids'));
         $includeWormholes = (bool) $input->getOption('include-wormholes');
+        $buildId = trim((string) $input->getOption('build-id'));
 
         $connection = $this->connection();
         $pdo = $connection->pdo();
         $checkpointRepo = new PrecomputeCheckpointRepository($connection);
-        $jobKey = 'gate_distances';
+        $resolver = new \Everoute\Universe\StaticTableResolver($connection);
+        $table = $resolver->writeTable(\Everoute\Universe\StaticTableResolver::GATE_DISTANCES, $buildId !== '' ? $buildId : null);
+        $jobKey = 'gate_distances' . ($buildId !== '' ? ':' . $buildId : '');
 
         if (!$resume) {
             if ($sourceIds === []) {
                 $output->writeln('<comment>Clearing gate_distances...</comment>');
-                $pdo->exec('TRUNCATE TABLE gate_distances');
+                $pdo->exec(sprintf('TRUNCATE TABLE `%s`', $table));
             } else {
                 $output->writeln('<comment>Clearing selected gate_distances sources...</comment>');
-                $this->deleteSources($pdo, $sourceIds);
+                $this->deleteSources($pdo, $table, $sourceIds);
             }
             $checkpointRepo->clear($jobKey);
         }
@@ -81,9 +85,9 @@ final class PrecomputeGateDistancesCommand extends Command
             $distances = $this->bfsDistances($systemId, $adjacency, $maxHops);
 
             $pdo->beginTransaction();
-            $deleteStmt = $pdo->prepare('DELETE FROM gate_distances WHERE from_system_id = :from');
+            $deleteStmt = $pdo->prepare(sprintf('DELETE FROM `%s` WHERE from_system_id = :from', $table));
             $deleteStmt->execute(['from' => $systemId]);
-            $this->insertDistances($pdo, $systemId, $distances);
+            $this->insertDistances($pdo, $table, $systemId, $distances);
             $pdo->commit();
 
             $processed++;
@@ -137,10 +141,10 @@ final class PrecomputeGateDistancesCommand extends Command
         return array_map(static fn (array $row): int => (int) $row['id'], $stmt->fetchAll());
     }
 
-    private function deleteSources(\PDO $pdo, array $sourceIds): void
+    private function deleteSources(\PDO $pdo, string $table, array $sourceIds): void
     {
         $placeholders = implode(',', array_fill(0, count($sourceIds), '?'));
-        $stmt = $pdo->prepare("DELETE FROM gate_distances WHERE from_system_id IN ($placeholders)");
+        $stmt = $pdo->prepare("DELETE FROM `$table` WHERE from_system_id IN ($placeholders)");
         $stmt->execute(array_values($sourceIds));
     }
 
@@ -193,7 +197,7 @@ final class PrecomputeGateDistancesCommand extends Command
         return $distances;
     }
 
-    private function insertDistances(\PDO $pdo, int $fromId, array $distances): void
+    private function insertDistances(\PDO $pdo, string $table, int $fromId, array $distances): void
     {
         if ($distances === []) {
             return;
@@ -204,19 +208,19 @@ final class PrecomputeGateDistancesCommand extends Command
         foreach ($distances as $toId => $hops) {
             $rows[] = [(int) $toId, (int) $hops];
             if (count($rows) >= $batchSize) {
-                $this->insertDistanceBatch($pdo, $fromId, $rows);
+                $this->insertDistanceBatch($pdo, $table, $fromId, $rows);
                 $rows = [];
             }
         }
         if ($rows !== []) {
-            $this->insertDistanceBatch($pdo, $fromId, $rows);
+            $this->insertDistanceBatch($pdo, $table, $fromId, $rows);
         }
     }
 
-    private function insertDistanceBatch(\PDO $pdo, int $fromId, array $rows): void
+    private function insertDistanceBatch(\PDO $pdo, string $table, int $fromId, array $rows): void
     {
         $placeholders = implode(',', array_fill(0, count($rows), '(?, ?, ?)'));
-        $sql = 'INSERT INTO gate_distances (from_system_id, to_system_id, hops) VALUES ' . $placeholders;
+        $sql = sprintf('INSERT INTO `%s` (from_system_id, to_system_id, hops) VALUES ', $table) . $placeholders;
         $params = [];
         foreach ($rows as [$toId, $hops]) {
             $params[] = $fromId;

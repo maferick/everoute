@@ -134,6 +134,31 @@ Suggested cron (off-peak, resumable):
 
 Use `--include-wormholes` on `precompute:gate-distances`, `jump:precompute`, or `precompute:all` when you explicitly want wormhole/non-standard systems included.
 
+
+### Shadow-table static rebuild + swap
+Use shadow mode to build a full static artifact set without affecting reads, then atomically promote it.
+
+```bash
+# 1) Build all static artifacts into shadow tables for a generated build id
+php bin/console static:rebuild --shadow --hours=24 --ranges=5,6,7,8,9,10 --max-hops=20
+
+# 2) (optional) explicit build id
+php bin/console static:rebuild --shadow --build-id=b20260210153000 --hours=24
+
+# 3) Promote a completed build id atomically
+php bin/console static:swap --build-id=b20260210153000
+```
+
+What this does:
+- `static:rebuild --shadow` writes to build-scoped tables such as:
+  - `gate_distances__{build_id}`
+  - `jump_neighbors__{build_id}`
+  - `region_hierarchy__{build_id}`
+  - `constellation_hierarchy__{build_id}`
+- `static:swap --build-id=...` performs a single `RENAME TABLE ...` window to promote shadow tables, then updates `static_meta.active_build_id`.
+- If any rebuild phase fails, `active_build_id` is not changed.
+- If swap validation/rename fails, `active_build_id` is not changed.
+
 ### Performance tuning knobs
 - `--sleep=0.05` adds backoff between systems to reduce DB load.
 - `--hours=0` disables the time limit.

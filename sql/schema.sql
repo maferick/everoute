@@ -53,6 +53,22 @@ CREATE TABLE IF NOT EXISTS jump_neighbors (
     CONSTRAINT fk_jump_neighbors_system FOREIGN KEY (system_id) REFERENCES systems (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS region_hierarchy (
+    system_id BIGINT NOT NULL PRIMARY KEY,
+    region_id BIGINT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_region_hierarchy_region (region_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS constellation_hierarchy (
+    system_id BIGINT NOT NULL PRIMARY KEY,
+    constellation_id BIGINT NULL,
+    region_id BIGINT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_constellation_hierarchy_constellation (constellation_id),
+    INDEX idx_constellation_hierarchy_region (region_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS stations (
     station_id BIGINT PRIMARY KEY,
     system_id BIGINT NOT NULL,
@@ -141,3 +157,15 @@ CREATE TABLE IF NOT EXISTS sde_meta (
     INDEX idx_sde_meta_build (build_number),
     INDEX idx_sde_meta_installed (installed_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS static_meta (
+    id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+    active_sde_build_number BIGINT NULL,
+    precompute_version INT NOT NULL,
+    built_at DATETIME NOT NULL,
+    active_build_id VARCHAR(64) NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+INSERT INTO static_meta (id, active_sde_build_number, precompute_version, built_at, active_build_id)
+VALUES (1, NULL, 1, NOW(), NULL)
+ON DUPLICATE KEY UPDATE precompute_version = VALUES(precompute_version);
