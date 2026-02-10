@@ -14,6 +14,9 @@ use Everoute\Risk\RiskRepository;
 use Everoute\Routing\JumpFatigueModel;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\NavigationEngine;
+use Everoute\Routing\RouteRequestFactory;
+use Everoute\Routing\RoutePlanner;
+use Everoute\Routing\RouteJobRepository;
 use Everoute\Routing\RouteService;
 use Everoute\Routing\ShipRules;
 use Everoute\Routing\SystemLookup;
@@ -78,11 +81,18 @@ $routeService = new RouteService(
 
 $validator = new Validator();
 $rateLimiter = new RateLimiter(Env::int('RATE_LIMIT_RPS', 5), Env::int('RATE_LIMIT_BURST', 20));
-$api = new ApiController($routeService, $riskRepo, $systems, $validator, $rateLimiter);
+
+$routePlanner = new RoutePlanner($routeService, $riskRepo);
+$routeRequestFactory = new RouteRequestFactory($validator);
+$routeJobs = new RouteJobRepository($connection);
+$api = new ApiController($routePlanner, $riskRepo, $systems, $validator, $rateLimiter, $routeRequestFactory, $routeJobs);
 
 $router = new Router();
 $router->add('GET', '/api/v1/health', [$api, 'health']);
 $router->add('POST', '/api/v1/route', [$api, 'route']);
+$router->add('POST', '/api/v1/route-jobs', [$api, 'createRouteJob']);
+$router->add('GET', '/api/v1/route-jobs/{job_id}', [$api, 'getRouteJob']);
+$router->add('DELETE', '/api/v1/route-jobs/{job_id}', [$api, 'cancelRouteJob']);
 $router->add('GET', '/api/v1/systems', [$api, 'systemSearch']);
 $router->add('GET', '/api/v1/jump-distance-diagnostics', [$api, 'jumpDistanceDiagnostics']);
 $router->add('GET', '/api/v1/debug/jump-connectivity', [$api, 'jumpGraphDiagnostics']);
@@ -133,12 +143,7 @@ try {
             'hybrid_gate_budget_max' => max(2, min(12, (int) ($_POST['hybrid_gate_budget_max'] ?? 8))),
             'debug' => !empty($_POST['debug']),
         ];
-        $apiRequest = new Request('POST', '/api/v1/route', [], $payload, [], $request->ip, $request->requestId);
-        $handler->setRequest($apiRequest);
-        $apiResponse = $api->route($apiRequest);
-        $apiResponse->headers['X-Request-Id'] = $request->requestId;
-        $result = json_decode($apiResponse->body, true);
-        $handler->setRequest($request);
+        $result = null;
     } else {
         $result = null;
     }

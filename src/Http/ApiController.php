@@ -13,14 +13,19 @@ if (!class_exists(\Everoute\Routing\ShipProfile::class)) {
 if (!class_exists(\Everoute\Routing\RouteRequest::class)) {
     require_once __DIR__ . '/../Routing/RouteRequest.php';
 }
+if (!class_exists(\Everoute\Routing\RoutePlanner::class)) {
+    require_once __DIR__ . '/../Routing/RoutePlanner.php';
+}
+if (!class_exists(\Everoute\Routing\RouteRequestFactory::class)) {
+    require_once __DIR__ . '/../Routing/RouteRequestFactory.php';
+}
 
 use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
 use Everoute\Routing\JumpMath;
-use Everoute\Routing\PreferenceProfile;
-use Everoute\Routing\RouteRequest;
-use Everoute\Routing\RouteService;
-use Everoute\Routing\ShipProfile;
+use Everoute\Routing\RouteJobRepository;
+use Everoute\Routing\RoutePlanner;
+use Everoute\Routing\RouteRequestFactory;
 use Everoute\Security\RateLimiter;
 use Everoute\Security\Validator;
 use Everoute\Universe\SystemRepository;
@@ -28,12 +33,18 @@ use Everoute\Universe\SystemRepository;
 final class ApiController
 {
     public function __construct(
-        private RouteService $routes,
+        private RoutePlanner|\Everoute\Routing\RouteService $planner,
         private RiskRepository $risk,
         private SystemRepository $systems,
         private Validator $validator,
-        private RateLimiter $rateLimiter
+        private RateLimiter $rateLimiter,
+        private ?RouteRequestFactory $requestFactory = null,
+        private ?RouteJobRepository $routeJobs = null
     ) {
+        if ($this->planner instanceof \Everoute\Routing\RouteService) {
+            $this->planner = new RoutePlanner($this->planner, $this->risk);
+        }
+        $this->requestFactory ??= new RouteRequestFactory($this->validator);
     }
 
     public function health(Request $request): Response
@@ -67,103 +78,74 @@ final class ApiController
             return new JsonResponse(['error' => 'rate_limited'], 429);
         }
 
-        $body = $request->body;
-        $from = $this->validator->string($body['from_id'] ?? $body['from'] ?? null);
-        $to = $this->validator->string($body['to_id'] ?? $body['to'] ?? null);
-        if ($from === null || $to === null) {
+        try {
+            ['request' => $routeRequest] = $this->requestFactory->fromBody($request->body);
+        } catch (\InvalidArgumentException) {
             return new JsonResponse(['error' => 'Invalid from/to'], 422);
         }
 
-        $mode = $this->validator->enum((string) ($body['mode'] ?? ShipProfile::DEFAULT_MODE), ['hauling', 'subcap', 'capital'], ShipProfile::DEFAULT_MODE);
-        $shipClass = $this->validator->enum((string) ($body['ship_class'] ?? 'subcap'), [
-            'interceptor',
-            'subcap',
-            'dst',
-            'freighter',
-            'capital',
-            'jump_freighter',
-            'super',
-            'titan',
-        ], 'subcap');
-        $jumpShipType = $this->validator->string($body['jump_ship_type'] ?? null);
-        $jumpSkillLevel = $this->validator->int($body['jump_skill_level'] ?? null, 0, 5, 5);
-
-        $isCapitalRequest = in_array($shipClass, ['capital', 'jump_freighter', 'super', 'titan'], true);
-        $safety = $this->validator->int($body['safety_vs_speed'] ?? null, 0, 100, $isCapitalRequest ? 70 : 50);
-        $requestedProfile = $this->validator->enum(
-            strtolower((string) ($body['preference_profile'] ?? $body['profile'] ?? '')),
-            [PreferenceProfile::SPEED, PreferenceProfile::BALANCED, PreferenceProfile::SAFETY],
-            ''
-        );
-        $preference = $this->validator->enum((string) ($body['preference'] ?? 'shorter'), ['shorter', 'safer', 'less_secure'], 'shorter');
-
-        $avoidLowsec = $this->validator->bool($body['avoid_lowsec'] ?? null, false);
-        $avoidNullsec = $this->validator->bool($body['avoid_nullsec'] ?? null, false);
-        $preferNpc = $this->validator->bool($body['prefer_npc_stations'] ?? null, $isCapitalRequest);
-        $requireStationMidpoints = $this->validator->bool($body['require_station_midpoints'] ?? ($body['use_stations'] ?? null), false);
-        $stationConstraintMode = $this->validator->enum(
-            strtolower((string) ($body['station_constraint_mode'] ?? ($body['avoid_strictness'] ?? ''))),
-            ['soft', 'strict'],
-            ''
-        );
-        $stationType = $this->validator->enum(strtolower((string) ($body['station_type'] ?? 'npc')), ['npc'], 'npc');
-        $allowGateReposition = $this->validator->bool($body['allow_gate_reposition'] ?? null, true);
-        $hybridGateBudgetMax = $this->validator->int($body['hybrid_gate_budget_max'] ?? null, 2, 12, 8);
-
-        $fuelPerLyFactorRaw = $body['fuel_per_ly_factor'] ?? (($body['ship_profile']['fuel_per_ly_factor'] ?? null));
-        $fuelPerLyFactor = is_numeric($fuelPerLyFactorRaw) ? (float) $fuelPerLyFactorRaw : null;
-
-        $shipProfile = ShipProfile::create(
-            $mode,
-            $shipClass,
-            $jumpShipType,
-            $jumpSkillLevel,
-            $fuelPerLyFactor,
-            null
-        );
-
-        $routeRequest = RouteRequest::create(
-            $from,
-            $to,
-            $shipProfile,
-            PreferenceProfile::create($requestedProfile !== '' ? $requestedProfile : null, $safety),
-            $preference,
-            $avoidLowsec,
-            $avoidNullsec,
-            $this->validator->enum(
-                strtolower((string) ($body['avoid_strictness'] ?? '')),
-                ['soft', 'strict'],
-                ''
-            ),
-            isset($body['avoid_specific_systems']) ? $this->validator->list((string) $body['avoid_specific_systems']) : [],
-            $preferNpc,
-            $requireStationMidpoints,
-            $stationConstraintMode,
-            $stationType,
-            $allowGateReposition,
-            $hybridGateBudgetMax
-        );
-
-        $result = $this->routes->computeRoutes($routeRequest);
+        $result = $this->planner->compute($routeRequest);
         if (isset($result['error'])) {
             $status = $result['error'] === 'not_feasible' ? 422 : 404;
             return new JsonResponse($result, $status);
         }
 
-        $selectedPolicy = $routeRequest->selectedPolicy();
-        $result['risk_updated_at'] = $this->risk->getLatestUpdate(Env::get('RISK_PROVIDER', 'esi_system_kills'));
-        $result['selected_policy'] = $selectedPolicy;
-        $result['explanation'][] = sprintf(
-            'NPC detour policy: %s side at %d%% (%s).',
-            $selectedPolicy['slider_side'],
-            $routeRequest->preferenceProfile->safetyVsSpeed,
-            $selectedPolicy['npc_detour_note']
-        );
-        if (isset($result['debug']) && is_array($result['debug'])) {
-            $result['debug']['selected_policy'] = $selectedPolicy;
+        return new JsonResponse($result);
+    }
+
+    public function createRouteJob(Request $request): Response
+    {
+        if ($this->routeJobs === null) {
+            return new JsonResponse(['error' => 'route_jobs_unavailable'], 503);
+        }
+        if (!$this->rateLimiter->allow('route_jobs:' . $request->ip)) {
+            return new JsonResponse(['error' => 'rate_limited'], 429);
         }
 
-        return new JsonResponse($result);
+        try {
+            ['payload' => $payload] = $this->requestFactory->fromBody($request->body);
+        } catch (\InvalidArgumentException) {
+            return new JsonResponse(['error' => 'Invalid from/to'], 422);
+        }
+
+        $jobId = $this->routeJobs->create($payload, Env::int('ROUTE_JOB_TTL_MINUTES', 15));
+
+        return new JsonResponse([
+            'job_id' => $jobId,
+            'status' => 'queued',
+            'poll_url' => '/api/v1/route-jobs/' . $jobId,
+        ], 202);
+    }
+
+    public function getRouteJob(Request $request): Response
+    {
+        if ($this->routeJobs === null) {
+            return new JsonResponse(['error' => 'route_jobs_unavailable'], 503);
+        }
+
+        $jobId = (string) ($request->params['job_id'] ?? '');
+        $job = $this->routeJobs->get($jobId);
+        if ($job === null) {
+            return new JsonResponse(['error' => 'not_found'], 404);
+        }
+
+        return new JsonResponse([
+            'job_id' => $job['id'],
+            'status' => $job['status'],
+            'progress' => !empty($job['progress_json']) ? json_decode((string) $job['progress_json'], true) : null,
+            'result' => $job['status'] === 'done' && !empty($job['result_json']) ? json_decode((string) $job['result_json'], true) : null,
+            'error' => $job['status'] === 'failed' ? $job['error_text'] : null,
+        ]);
+    }
+
+    public function cancelRouteJob(Request $request): Response
+    {
+        if ($this->routeJobs === null) {
+            return new JsonResponse(['error' => 'route_jobs_unavailable'], 503);
+        }
+
+        $jobId = (string) ($request->params['job_id'] ?? '');
+        return new JsonResponse(['job_id' => $jobId, 'canceled' => $this->routeJobs->cancel($jobId)]);
     }
 
 
@@ -203,7 +185,7 @@ final class ApiController
         $jumpSkillLevel = $this->validator->int($request->query['jump_skill_level'] ?? null, 0, 5, 5);
         $gateBudget = $this->validator->int($request->query['hybrid_gate_budget_max'] ?? null, 0, 12, 8);
 
-        $result = $this->routes->computeRoutes([
+        ['request' => $routeRequest] = $this->requestFactory->fromBody([
             'from' => $from,
             'to' => $to,
             'mode' => 'capital',
@@ -212,11 +194,10 @@ final class ApiController
             'jump_skill_level' => $jumpSkillLevel,
             'allow_gate_reposition' => true,
             'hybrid_gate_budget_max' => $gateBudget,
-            'hybrid_mixed_graph' => false,
-            'debug' => true,
-            'prefer_npc' => false,
             'prefer_npc_stations' => false,
         ]);
+
+        $result = $this->planner->compute($routeRequest);
 
         $debug = is_array($result['debug'] ?? null) ? $result['debug'] : [];
         $jumpRoute = is_array($result['jump_route'] ?? null) ? $result['jump_route'] : [];

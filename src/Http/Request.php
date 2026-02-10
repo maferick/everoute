@@ -13,8 +13,9 @@ final class Request
     public array $headers;
     public string $ip;
     public string $requestId;
+    public array $params;
 
-    public function __construct(string $method, string $path, array $query, array $body, array $headers, string $ip, ?string $requestId = null)
+    public function __construct(string $method, string $path, array $query, array $body, array $headers, string $ip, ?string $requestId = null, array $params = [])
     {
         $this->method = strtoupper($method);
         $this->path = $path;
@@ -23,6 +24,7 @@ final class Request
         $this->headers = $headers;
         $this->ip = $ip;
         $this->requestId = $requestId ?? ($headers['x-request-id'] ?? self::generateRequestId());
+        $this->params = $params;
     }
 
     public static function fromGlobals(bool $trustProxy): self
@@ -57,6 +59,11 @@ final class Request
         $requestId = $headers['x-request-id'] ?? self::generateRequestId();
 
         return new self($method, $path, $query, $body, $headers, $ip, $requestId);
+    }
+
+    public function withParams(array $params): self
+    {
+        return new self($this->method, $this->path, $this->query, $this->body, $this->headers, $this->ip, $this->requestId, $params);
     }
 
     private static function generateRequestId(): string
