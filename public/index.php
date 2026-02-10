@@ -85,6 +85,7 @@ $router->add('GET', '/api/v1/health', [$api, 'health']);
 $router->add('POST', '/api/v1/route', [$api, 'route']);
 $router->add('GET', '/api/v1/systems', [$api, 'systemSearch']);
 $router->add('GET', '/api/v1/jump-distance-diagnostics', [$api, 'jumpDistanceDiagnostics']);
+$router->add('GET', '/api/v1/debug/jump-connectivity', [$api, 'jumpGraphDiagnostics']);
 $router->add('GET', '/api/v1/system-risk', [$api, 'systemRisk']);
 $router->add('GET', '/api/v1/heatmap', [$api, 'heatmap']);
 
