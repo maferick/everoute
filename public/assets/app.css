@@ -389,6 +389,39 @@ button.loading .button-spinner {
     color: #cbd5e1;
 }
 
+
+.fallback-alert {
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid #7c2d12;
+    background: #2a120f;
+    color: #fed7aa;
+    display: grid;
+    gap: 4px;
+    font-size: 0.9rem;
+}
+
+.strictness-meta {
+    display: grid;
+    gap: 6px;
+    font-size: 0.85rem;
+    background: #121824;
+    border: 1px solid #222a35;
+    border-radius: 10px;
+    padding: 8px 10px;
+}
+
+.fallback-inline {
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid #7c2d12;
+    background: #2a120f;
+    color: #fed7aa;
+    font-size: 0.82rem;
+}
+
 .explanation {
     margin-top: 20px;
     padding-top: 16px;

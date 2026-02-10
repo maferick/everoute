@@ -114,6 +114,7 @@ try {
             'safety_vs_speed' => (int) ($_POST['safety_vs_speed'] ?? 50),
             'avoid_lowsec' => !empty($_POST['avoid_lowsec']),
             'avoid_nullsec' => !empty($_POST['avoid_nullsec']),
+            'avoid_strictness' => $_POST['avoid_strictness'] ?? '',
             'avoid_specific_systems' => $_POST['avoid_specific_systems'] ?? '',
             'prefer_npc_stations' => !empty($_POST['prefer_npc_stations']),
             'debug' => !empty($_POST['debug']),
