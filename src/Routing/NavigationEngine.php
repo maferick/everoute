@@ -765,6 +765,45 @@ final class NavigationEngine
         array $jumpBaseline,
         array $options
     ): array {
+        if ($this->useLegacyHybridPlanner($options)) {
+            $route = $this->computeHybridRouteAttemptLegacy(
+                $startId,
+                $endId,
+                $shipType,
+                $effectiveRange,
+                $rangeBucket,
+                $gateBaseline,
+                $jumpBaseline,
+                $options
+            );
+            $route['planner'] = 'legacy_two_phase';
+            return $route;
+        }
+
+        $route = $this->computeHybridRouteAttemptMixed(
+            $startId,
+            $endId,
+            $shipType,
+            $effectiveRange,
+            $rangeBucket,
+            $gateBaseline,
+            $jumpBaseline,
+            $options
+        );
+        $route['planner'] = 'mixed_graph';
+        return $route;
+    }
+
+    private function computeHybridRouteAttemptMixed(
+        int $startId,
+        int $endId,
+        string $shipType,
+        ?float $effectiveRange,
+        ?int $rangeBucket,
+        array $gateBaseline,
+        array $jumpBaseline,
+        array $options
+    ): array {
         if ($startId === $endId) {
             return [
                 'feasible' => true,
@@ -789,6 +828,158 @@ final class NavigationEngine
             return [
                 'feasible' => false,
                 'reason' => 'Jump range unavailable for ship.',
+                'nodes_explored' => 0,
+                'illegal_systems_filtered' => 0,
+            ];
+        }
+
+        $jumpAdjacency = $this->jumpNeighborRepo->loadRangeBucket($rangeBucket, count($this->systems));
+        if ($jumpAdjacency === null) {
+            return [
+                'feasible' => false,
+                'reason' => 'Missing precomputed jump neighbors.',
+                'nodes_explored' => 0,
+                'illegal_systems_filtered' => 0,
+            ];
+        }
+
+        $boundedCandidates = $this->boundedJumpCandidateSet($startId, $endId, $rangeBucket);
+        $jumpGraph = $this->buildJumpGraph(
+            $jumpAdjacency,
+            $startId,
+            $endId,
+            $shipType,
+            $options,
+            false,
+            $boundedCandidates
+        );
+        $gateGraph = $this->buildGateGraph($startId, $endId, $shipType, $options);
+        $neighbors = $this->mergeGraphs($gateGraph['neighbors'], $jumpGraph['neighbors']);
+        $filtered = (int) ($gateGraph['filtered'] ?? 0) + (int) ($jumpGraph['filtered'] ?? 0);
+
+        if (!isset($neighbors[$startId]) || !isset($neighbors[$endId])) {
+            return [
+                'feasible' => false,
+                'reason' => 'Start or destination not allowed for mixed travel.',
+                'nodes_explored' => 0,
+                'illegal_systems_filtered' => $filtered,
+            ];
+        }
+
+        $preference = $this->normalizeGatePreference($options);
+        $minHybridSelectionImprovement = max(0.0, (float) ($options['hybrid_min_selection_improvement'] ?? 0.01));
+        $dijkstra = new Dijkstra();
+        $this->riskWeightCache = $this->riskWeight($options);
+        $result = $dijkstra->shortestPath(
+            $neighbors,
+            $startId,
+            $endId,
+            function (int $from, int $to, mixed $edgeData) use ($options, $shipType, $preference): float {
+                $profile = $this->baseCostProfiles[$to] ?? null;
+                if ($profile === null) {
+                    return INF;
+                }
+                $edgeType = (string) ($edgeData['type'] ?? 'gate');
+                if ($edgeType === 'jump') {
+                    $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
+                    $metrics = $this->fatigueModel->lookupHopMetricsForShipType($shipType, $distance);
+                    $fatigue = (float) ($metrics['jump_fatigue_minutes'] ?? 0.0);
+                    $cooldown = (float) ($metrics['jump_activation_minutes'] ?? 0.0);
+                    return $distance
+                        + $fatigue
+                        + $cooldown
+                        + ((float) $profile['risk_penalty'] * $this->riskWeightCache)
+                        + $this->npcStationStepBonus($profile, $options)
+                        + $this->avoidPenalty($profile, $options);
+                }
+
+                return $this->gateStepCost($preference, $profile)
+                    + $this->npcStationStepBonus($profile, $options)
+                    + $this->avoidPenalty($profile, $options);
+            },
+            null,
+            null,
+            50000
+        );
+
+        if ($result['path'] === [] || ($result['path'][count($result['path']) - 1] ?? null) !== $endId) {
+            return [
+                'feasible' => false,
+                'reason' => 'No hybrid route found.',
+                'nodes_explored' => (int) ($result['nodes_explored'] ?? 0),
+                'illegal_systems_filtered' => $filtered,
+            ];
+        }
+
+        $segments = $this->buildSegments($result['path'], $result['edges'], $shipType);
+        if (!$this->validateRoute($segments, $shipType, $effectiveRange)) {
+            return [
+                'feasible' => false,
+                'reason' => 'Hybrid route failed validation.',
+                'nodes_explored' => (int) ($result['nodes_explored'] ?? 0),
+                'illegal_systems_filtered' => $filtered,
+            ];
+        }
+
+        $summary = $this->summarizeRoute($segments, (float) ($result['distance'] ?? 0.0));
+        $summary['nodes_explored'] = (int) ($result['nodes_explored'] ?? 0);
+        $summary['illegal_systems_filtered'] = $filtered;
+        $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($segments), $options);
+
+        $hybridTimeCost = $this->routeTimeCost($summary);
+        $gateTimeCost = !empty($gateBaseline['feasible']) ? $this->routeTimeCost($gateBaseline) : INF;
+        $jumpTimeCost = !empty($jumpBaseline['feasible']) ? $this->routeTimeCost($jumpBaseline) : INF;
+        $summary['baseline_time_costs'] = [
+            'hybrid' => $hybridTimeCost,
+            'gate' => $gateTimeCost,
+            'jump' => $jumpTimeCost,
+            'required_min_improvement' => $minHybridSelectionImprovement,
+        ];
+
+        if (is_finite($gateTimeCost) && ($gateTimeCost - $hybridTimeCost) < $minHybridSelectionImprovement) {
+            return [
+                'feasible' => false,
+                'reason' => sprintf(
+                    'Hybrid rejected: insufficient gain vs gate baseline (min %.3f time_cost).',
+                    $minHybridSelectionImprovement
+                ),
+                'nodes_explored' => (int) ($result['nodes_explored'] ?? 0),
+                'illegal_systems_filtered' => $filtered,
+            ];
+        }
+        if (is_finite($jumpTimeCost) && ($jumpTimeCost - $hybridTimeCost) < $minHybridSelectionImprovement) {
+            return [
+                'feasible' => false,
+                'reason' => sprintf(
+                    'Hybrid rejected: insufficient gain vs jump baseline (min %.3f time_cost).',
+                    $minHybridSelectionImprovement
+                ),
+                'nodes_explored' => (int) ($result['nodes_explored'] ?? 0),
+                'illegal_systems_filtered' => $filtered,
+            ];
+        }
+
+        return $summary;
+    }
+
+    private function computeHybridRouteAttemptLegacy(
+        int $startId,
+        int $endId,
+        string $shipType,
+        ?float $effectiveRange,
+        ?int $rangeBucket,
+        array $gateBaseline,
+        array $jumpBaseline,
+        array $options
+    ): array {
+        if ($startId === $endId) {
+            return [
+                'feasible' => true,
+                'total_cost' => 0.0,
+                'total_gates' => 0,
+                'total_jump_ly' => 0.0,
+                'segments' => [],
+                'systems' => [$this->systemSummary($startId)],
                 'nodes_explored' => 0,
                 'illegal_systems_filtered' => 0,
             ];
@@ -1113,10 +1304,7 @@ final class NavigationEngine
                     $filtered++;
                     continue;
                 }
-                $neighbors[$from][] = [
-                    'to' => $to,
-                    'type' => 'gate',
-                ];
+                $neighbors[$from][] = $this->buildGateEdgeData((int) $from, (int) $to);
             }
         }
         foreach ([$startId, $endId] as $endpointId) {
@@ -1804,6 +1992,15 @@ final class NavigationEngine
         return Env::bool('ROUTE_DEBUG', false) || $logLevel === 'debug' || !empty($options['debug']);
     }
 
+    private function useLegacyHybridPlanner(array $options): bool
+    {
+        if (array_key_exists('hybrid_mixed_graph', $options)) {
+            return empty($options['hybrid_mixed_graph']);
+        }
+
+        return !Env::bool('HYBRID_MIXED_GRAPH_ENABLED', false);
+    }
+
     private function runJumpDiagnostics(int $startId, int $endId, string $shipType, array $options, int $rangeBucket): void
     {
         $buckets = [$rangeBucket - 1, $rangeBucket - 2];
@@ -2254,18 +2451,16 @@ final class NavigationEngine
     private function buildGateNeighbors(): array
     {
         $neighbors = [];
-        foreach ($this->gateNeighbors as $from => $toList) {
+        foreach ($this->adjacency as $from => $edges) {
             if (!isset($this->systems[$from])) {
                 continue;
             }
-            foreach ($toList as $to) {
+            foreach ($edges as $edge) {
+                $to = (int) ($edge['to'] ?? 0);
                 if (!isset($this->systems[$to])) {
                     continue;
                 }
-                $neighbors[$from][] = [
-                    'to' => $to,
-                    'type' => 'gate',
-                ];
+                $neighbors[$from][] = $this->buildGateEdgeData((int) $from, $to, $edge);
             }
             if (!isset($neighbors[$from])) {
                 $neighbors[$from] = [];
@@ -2385,6 +2580,30 @@ final class NavigationEngine
         }
 
         return (int) ($system['region_id'] ?? 0) === 10000070;
+    }
+
+    /** @param array{to?: int, is_regional_gate?: bool}|null $adjacencyEdge */
+    private function buildGateEdgeData(int $from, int $to, ?array $adjacencyEdge = null): array
+    {
+        $isRegionalGate = false;
+        if ($adjacencyEdge !== null) {
+            $isRegionalGate = !empty($adjacencyEdge['is_regional_gate']);
+        } else {
+            foreach ($this->adjacency[$from] ?? [] as $edge) {
+                if ((int) ($edge['to'] ?? 0) !== $to) {
+                    continue;
+                }
+                $isRegionalGate = !empty($edge['is_regional_gate']);
+                break;
+            }
+        }
+
+        return [
+            'to' => $to,
+            'type' => 'gate',
+            'distance_ly' => null,
+            'is_regional_gate' => $isRegionalGate,
+        ];
     }
 
     /** @param array<int, mixed> $edges */
