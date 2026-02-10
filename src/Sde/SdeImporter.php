@@ -45,7 +45,7 @@ final class SdeImporter
                 $pdo,
                 'systems',
                 'systems_stage',
-                ['id', 'name', 'security', 'security_raw', 'security_nav', 'region_id', 'constellation_id', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at']
+                ['id', 'name', 'security', 'security_raw', 'security_nav', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at']
             );
             $this->insertFromStage(
                 $pdo,
@@ -83,6 +83,8 @@ final class SdeImporter
             security_nav DECIMAL(4,2) NOT NULL,
             region_id BIGINT NULL,
             constellation_id BIGINT NULL,
+            is_wormhole TINYINT(1) NOT NULL DEFAULT 0,
+            is_normal_universe TINYINT(1) NOT NULL DEFAULT 0,
             has_npc_station TINYINT(1) NOT NULL DEFAULT 0,
             npc_station_count INT NOT NULL DEFAULT 0,
             x DOUBLE NOT NULL DEFAULT 0,
@@ -122,6 +124,8 @@ final class SdeImporter
             security_nav DECIMAL(4,2) NOT NULL,
             region_id BIGINT NULL,
             constellation_id BIGINT NULL,
+            is_wormhole TINYINT(1) NOT NULL DEFAULT 0,
+            is_normal_universe TINYINT(1) NOT NULL DEFAULT 0,
             has_npc_station TINYINT(1) NOT NULL DEFAULT 0,
             npc_station_count INT NOT NULL DEFAULT 0,
             x DOUBLE NOT NULL DEFAULT 0,
@@ -175,6 +179,8 @@ final class SdeImporter
         $this->ensureSystemColumn($pdo, 'npc_station_count', 'INT NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'security_raw', 'DECIMAL(4,2) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'security_nav', 'DECIMAL(4,2) NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'is_wormhole', 'TINYINT(1) NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'is_normal_universe', 'TINYINT(1) NOT NULL DEFAULT 0');
     }
 
     private function ensureStationTypeColumn(PDO $pdo): void
@@ -244,7 +250,7 @@ final class SdeImporter
                 $this->insertBatch(
                     $pdo,
                     'systems_stage',
-                    ['id', 'name', 'security', 'security_raw', 'security_nav', 'region_id', 'constellation_id', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
+                    ['id', 'name', 'security', 'security_raw', 'security_nav', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
                     $batch
                 );
                 $batch = [];
@@ -256,7 +262,7 @@ final class SdeImporter
             $this->insertBatch(
                 $pdo,
                 'systems_stage',
-                ['id', 'name', 'security', 'security_raw', 'security_nav', 'region_id', 'constellation_id', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
+                ['id', 'name', 'security', 'security_raw', 'security_nav', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
                 $batch
             );
         }
@@ -531,6 +537,11 @@ final class SdeImporter
             $systemSize = 1.0;
         }
 
+        $wormholeClassId = $row['wormholeClassID'] ?? $row['wormholeClassId'] ?? $row['wormhole_class_id'] ?? null;
+        $isWormholeRegion = $regionId !== null && (int) $regionId >= 11000000 && (int) $regionId < 12000000;
+        $isNormalUniverse = $regionId !== null && (int) $regionId >= 10000001 && (int) $regionId <= 10001000;
+        $isWormhole = $isWormholeRegion || (is_numeric($wormholeClassId) && (int) $wormholeClassId > 0);
+
         return [
             'id' => $id,
             'name' => $name,
@@ -539,6 +550,8 @@ final class SdeImporter
             'security_nav' => $securityNav,
             'region_id' => $regionId !== null ? (int) $regionId : null,
             'constellation_id' => $constellationId !== null ? (int) $constellationId : null,
+            'is_wormhole' => $isWormhole ? 1 : 0,
+            'is_normal_universe' => $isNormalUniverse ? 1 : 0,
             'has_npc_station' => 0,
             'npc_station_count' => 0,
             'x' => $x,

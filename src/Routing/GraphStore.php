@@ -25,7 +25,7 @@ final class GraphStore
     /** @var array<int, int> */
     private static array $regionalGateDistance = [];
 
-    public static function load(SystemRepository $systemsRepo, StargateRepository $stargatesRepo, Logger $logger): void
+    public static function load(SystemRepository $systemsRepo, StargateRepository $stargatesRepo, Logger $logger, bool $includeWormholes = false): void
     {
         if (self::$loaded) {
             return;
@@ -33,7 +33,7 @@ final class GraphStore
 
         self::$systems = [];
         self::$systemsByName = [];
-        foreach ($systemsRepo->listForRouting() as $system) {
+        foreach ($systemsRepo->listForRouting($includeWormholes) as $system) {
             $id = (int) $system['id'];
             self::$systems[$id] = $system;
             self::$systemsByName[strtolower((string) $system['name'])] = $id;
@@ -45,7 +45,7 @@ final class GraphStore
         self::$reverseAdjacency = [];
         self::$regionalGateDistance = [];
         $regionalGateSeeds = [];
-        foreach ($stargatesRepo->allEdges() as $edge) {
+        foreach ($stargatesRepo->allEdges($includeWormholes) as $edge) {
             $from = (int) $edge['from_system_id'];
             $to = (int) $edge['to_system_id'];
             $isRegional = !empty($edge['is_regional_gate']);
@@ -91,13 +91,13 @@ final class GraphStore
         }
 
         self::$loaded = true;
-        $logger->info('Route graph loaded', ['systems' => count(self::$systems)]);
+        $logger->info('Route graph loaded', ['systems' => count(self::$systems), 'include_wormholes' => $includeWormholes]);
     }
 
-    public static function refresh(SystemRepository $systemsRepo, StargateRepository $stargatesRepo, Logger $logger): void
+    public static function refresh(SystemRepository $systemsRepo, StargateRepository $stargatesRepo, Logger $logger, bool $includeWormholes = false): void
     {
         self::$loaded = false;
-        self::load($systemsRepo, $stargatesRepo, $logger);
+        self::load($systemsRepo, $stargatesRepo, $logger, $includeWormholes);
     }
 
     public static function isLoaded(): bool

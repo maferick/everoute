@@ -71,12 +71,14 @@ final class SystemRepository
         return $stmt->fetchAll();
     }
 
-    public function listForRouting(): array
+    public function listForRouting(bool $includeWormholes = false): array
     {
         $selectFields = $this->systemSelectFields();
-        $stmt = $this->connection->pdo()->query(
-            "SELECT {$selectFields} FROM systems"
-        );
+        $sql = "SELECT {$selectFields} FROM systems";
+        if (!$includeWormholes) {
+            $sql .= ' WHERE is_normal_universe = 1 AND is_wormhole = 0';
+        }
+        $stmt = $this->connection->pdo()->query($sql);
         return $stmt->fetchAll();
     }
 
@@ -90,7 +92,7 @@ final class SystemRepository
     private function systemSelectFields(): string
     {
         $securityExpr = 'ROUND(COALESCE(security_raw, security), 1)';
-        return "id, name, {$securityExpr} AS security, security_raw, {$securityExpr} AS security_nav, region_id, constellation_id, has_npc_station, npc_station_count, system_size_au, x, y, z";
+        return "id, name, {$securityExpr} AS security, security_raw, {$securityExpr} AS security_nav, region_id, constellation_id, is_wormhole, is_normal_universe, has_npc_station, npc_station_count, system_size_au, x, y, z";
     }
 
     private function hasSecurityNavColumn(): bool

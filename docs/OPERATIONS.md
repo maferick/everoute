@@ -82,20 +82,26 @@ php bin/console cache:warm
 These jobs are heavy and intended for long-running offline execution. They are resumable via DB checkpoints and safe to stop/restart. All outputs remain valid until the SDE/map changes.
 
 ### Run all precomputes (recommended)
-Orchestrates `precompute:system-facts`, `map:derive`, `precompute:gate-distances`, and `jump:precompute` in order. The command prints start/finish logs per step and stops immediately if any step fails.
+Orchestrates `precompute:system-facts`, `map:derive`, `precompute:gate-distances`, and `jump:precompute` in order. The command prints start/finish logs per step and stops immediately if any step fails. By default these steps only process normal stargate-connected universe systems (`is_normal_universe=1`, `is_wormhole=0`) to avoid contaminating k-space routing data with wormhole-only space.
 ```bash
 # typical incremental refresh
 php bin/console precompute:all --hours=1
 
 # full long run with resumable heavy steps
 php bin/console precompute:all --hours=24 --resume --max-hops=20 --ranges=5,6,7,8,9,10
+
+# opt-in: include wormhole/non-standard systems
+php bin/console precompute:all --hours=24 --resume --include-wormholes
 ```
 Expected runtime: seconds for `precompute:system-facts` and `map:derive`; minutes to many hours for gate distances and jump neighbors depending on hardware, database performance, and selected options.
 
 ### System facts (fast)
-Recompute regional gates and NPC station flags:
+Recompute regional gates, NPC station flags, and universe classification flags (`is_wormhole`, `is_normal_universe`):
 ```bash
 php bin/console precompute:system-facts
+
+# optional compatibility flag (classification still computed)
+php bin/console precompute:system-facts --include-wormholes
 ```
 
 ### Gate hop distances (large)
@@ -125,6 +131,8 @@ Suggested cron (off-peak, resumable):
 ```cron
 15 4 * * 1 flock -n /var/lock/everoute-precompute-jump-neighbors.lock /usr/bin/php /var/www/everoute/bin/console jump:precompute --hours=6 --resume
 ```
+
+Use `--include-wormholes` on `precompute:gate-distances`, `jump:precompute`, or `precompute:all` when you explicitly want wormhole/non-standard systems included.
 
 ### Performance tuning knobs
 - `--sleep=0.05` adds backoff between systems to reduce DB load.

@@ -23,7 +23,8 @@ final class RebuildJumpNeighborsCommand extends Command
             ->setDescription('Rebuild jump neighbor cache using v1 encoding')
             ->addOption('hours', null, InputOption::VALUE_REQUIRED, 'Stop after N hours (0 = no limit)', '1')
             ->addOption('ranges', null, InputOption::VALUE_REQUIRED, 'Comma-separated LY ranges to compute (default config)')
-            ->addOption('sleep', null, InputOption::VALUE_REQUIRED, 'Sleep seconds between systems', '0');
+            ->addOption('sleep', null, InputOption::VALUE_REQUIRED, 'Sleep seconds between systems', '0')
+            ->addOption('include-wormholes', null, InputOption::VALUE_NONE, 'Include wormhole and non-normal-universe systems');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -50,6 +51,10 @@ final class RebuildJumpNeighborsCommand extends Command
             '--ranges' => (string) $input->getOption('ranges'),
             '--sleep' => (string) $input->getOption('sleep'),
         ]);
+
+        if ((bool) $input->getOption('include-wormholes')) {
+            $args->setOption('include-wormholes', true);
+        }
 
         return $precompute->run($args, $output);
     }

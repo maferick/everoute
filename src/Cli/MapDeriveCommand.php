@@ -6,6 +6,7 @@ namespace Everoute\Cli;
 
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 final class MapDeriveCommand extends Command
@@ -18,11 +19,14 @@ final class MapDeriveCommand extends Command
     {
         $this
             ->setName(self::$defaultName)
-            ->setDescription('Compute derived map data after SDE import');
+            ->setDescription('Compute derived map data after SDE import')
+            ->addOption('include-wormholes', null, InputOption::VALUE_NONE, 'Include wormhole and non-normal-universe systems in derived data');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
+        $includeWormholes = (bool) $input->getOption('include-wormholes');
+
         $connection = $this->connection();
         $pdo = $connection->pdo();
 
@@ -49,6 +53,23 @@ final class MapDeriveCommand extends Command
                 ELSE 0
             END'
         );
+
+        $output->writeln('<info>Deriving system classification flags...</info>');
+        $pdo->exec(
+            'UPDATE systems
+            SET is_wormhole = CASE
+                WHEN region_id BETWEEN 11000000 AND 11999999 THEN 1
+                ELSE 0
+            END,
+            is_normal_universe = CASE
+                WHEN region_id BETWEEN 10000001 AND 10001000 THEN 1
+                ELSE 0
+            END'
+        );
+
+        if ($includeWormholes) {
+            $output->writeln('<comment>--include-wormholes specified: downstream routing/precompute commands may include classified-out systems when supported.</comment>');
+        }
 
         $output->writeln('<info>Map derived data updated.</info>');
         return Command::SUCCESS;

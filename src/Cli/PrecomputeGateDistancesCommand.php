@@ -25,7 +25,8 @@ final class PrecomputeGateDistancesCommand extends Command
             ->addOption('max-hops', null, InputOption::VALUE_REQUIRED, 'Maximum hops to store per source', '20')
             ->addOption('resume', null, InputOption::VALUE_NONE, 'Resume from last checkpoint')
             ->addOption('sleep', null, InputOption::VALUE_REQUIRED, 'Sleep seconds between sources', '0')
-            ->addOption('source-ids', null, InputOption::VALUE_REQUIRED, 'Comma-separated list of source system IDs to process');
+            ->addOption('source-ids', null, InputOption::VALUE_REQUIRED, 'Comma-separated list of source system IDs to process')
+            ->addOption('include-wormholes', null, InputOption::VALUE_NONE, 'Include wormhole and non-normal-universe systems');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -35,6 +36,7 @@ final class PrecomputeGateDistancesCommand extends Command
         $resume = (bool) $input->getOption('resume');
         $sleepSeconds = (float) $input->getOption('sleep');
         $sourceIds = $this->parseIdList((string) $input->getOption('source-ids'));
+        $includeWormholes = (bool) $input->getOption('include-wormholes');
 
         $connection = $this->connection();
         $pdo = $connection->pdo();
@@ -53,7 +55,7 @@ final class PrecomputeGateDistancesCommand extends Command
         }
 
         $cursor = $resume ? $checkpointRepo->getCursor($jobKey) : null;
-        $systems = $sourceIds !== [] ? $sourceIds : $this->fetchSystemIds($pdo);
+        $systems = $sourceIds !== [] ? $sourceIds : $this->fetchSystemIds($pdo, $includeWormholes);
         sort($systems);
         if ($cursor !== null) {
             $systems = array_values(array_filter($systems, static fn (int $id): bool => $id > $cursor));
@@ -64,7 +66,7 @@ final class PrecomputeGateDistancesCommand extends Command
             return Command::SUCCESS;
         }
 
-        $adjacency = $this->loadAdjacency($pdo);
+        $adjacency = $this->loadAdjacency($pdo, $includeWormholes);
         $total = count($systems);
         $processed = 0;
         $startedAt = microtime(true);
@@ -124,9 +126,14 @@ final class PrecomputeGateDistancesCommand extends Command
     }
 
     /** @return int[] */
-    private function fetchSystemIds(\PDO $pdo): array
+    private function fetchSystemIds(\PDO $pdo, bool $includeWormholes = false): array
     {
-        $stmt = $pdo->query('SELECT id FROM systems ORDER BY id');
+        $sql = 'SELECT id FROM systems';
+        if (!$includeWormholes) {
+            $sql .= ' WHERE is_normal_universe = 1 AND is_wormhole = 0';
+        }
+        $sql .= ' ORDER BY id';
+        $stmt = $pdo->query($sql);
         return array_map(static fn (array $row): int => (int) $row['id'], $stmt->fetchAll());
     }
 
@@ -138,9 +145,22 @@ final class PrecomputeGateDistancesCommand extends Command
     }
 
     /** @return array<int, int[]> */
-    private function loadAdjacency(\PDO $pdo): array
+    private function loadAdjacency(\PDO $pdo, bool $includeWormholes = false): array
     {
-        $stmt = $pdo->query('SELECT from_system_id, to_system_id FROM stargates');
+        if ($includeWormholes) {
+            $stmt = $pdo->query('SELECT from_system_id, to_system_id FROM stargates');
+        } else {
+            $stmt = $pdo->query(
+                'SELECT s.from_system_id, s.to_system_id
+                 FROM stargates s
+                 JOIN systems a ON a.id = s.from_system_id
+                 JOIN systems b ON b.id = s.to_system_id
+                 WHERE a.is_normal_universe = 1
+                   AND b.is_normal_universe = 1
+                   AND a.is_wormhole = 0
+                   AND b.is_wormhole = 0'
+            );
+        }
         $adjacency = [];
         foreach ($stmt->fetchAll() as $row) {
             $adjacency[(int) $row['from_system_id']][] = (int) $row['to_system_id'];
