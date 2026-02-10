@@ -72,13 +72,16 @@ final class JumpNeighborValidator
 
     /**
      * @param int[] $ranges
+     * @param int[]|null $expectedSystemIds
      * @return array{systems_checked:int, missing_rows_found:int, missing:array<int, int>}
      */
-    public function validateCompleteness(array $ranges): array
+    public function validateCompleteness(array $ranges, ?array $expectedSystemIds = null): array
     {
         $ranges = $this->normalizeRanges($ranges);
         $expectedCount = count($ranges);
-        $systems = $this->loadSystemIds();
+        $systems = $expectedSystemIds === null
+            ? $this->loadSystemIds()
+            : $this->normalizeSystemIds($expectedSystemIds);
         if ($systems === [] || $expectedCount === 0) {
             return ['systems_checked' => 0, 'missing_rows_found' => 0, 'missing' => []];
         }
@@ -139,6 +142,16 @@ final class JumpNeighborValidator
         $stmt = $pdo->query('SELECT COUNT(*) FROM systems');
         $count = $stmt ? $stmt->fetchColumn() : 0;
         return (int) $count;
+    }
+
+    /** @param int[] $systemIds
+     *  @return int[]
+     */
+    private function normalizeSystemIds(array $systemIds): array
+    {
+        $systemIds = array_values(array_unique(array_map('intval', $systemIds)));
+        sort($systemIds);
+        return $systemIds;
     }
 
     private function resolveRangeColumn(\PDO $pdo): string

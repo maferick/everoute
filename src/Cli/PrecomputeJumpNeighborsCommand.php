@@ -187,7 +187,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
         $this->reportProgress($output, $processed, $totalSystems, $startedAt, sprintf('<=%d', $maxRange));
 
         $validator = new JumpNeighborValidator($connection);
-        $completeness = $validator->validateCompleteness($ranges);
+        $completeness = $validator->validateCompleteness($ranges, $systemIds);
         if ($completeness['missing_rows_found'] > 0) {
             $output->writeln(sprintf(
                 '<error>Missing jump neighbor rows for %d systems.</error>',

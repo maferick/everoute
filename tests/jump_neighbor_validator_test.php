@@ -26,6 +26,7 @@ $pdo->exec('CREATE TABLE jump_neighbors (system_id INTEGER, range_ly INTEGER, ne
 $stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?)');
 $stmt->execute([1, 'Alpha']);
 $stmt->execute([2, 'Beta']);
+$stmt->execute([3, 'Gamma']);
 
 $insert = $pdo->prepare('INSERT INTO jump_neighbors VALUES (?, ?, ?, ?, ?, ?)');
 $insert->execute([1, 1, 2, '', 1, gmdate('c')]);
@@ -39,6 +40,17 @@ $validator = new JumpNeighborValidator($connection);
 $result = $validator->validateMonotonicity([1, 2, 3]);
 if ($result['violations_found'] !== 0) {
     throw new RuntimeException('Expected monotonic neighbor counts for sample systems.');
+}
+
+
+$subsetCompleteness = $validator->validateCompleteness([1, 2, 3], [1]);
+if ($subsetCompleteness['missing_rows_found'] !== 0) {
+    throw new RuntimeException('Expected no missing rows when validating only included routing systems.');
+}
+
+$fullCompleteness = $validator->validateCompleteness([1, 2, 3], [1, 2, 3]);
+if ($fullCompleteness['missing_rows_found'] !== 1 || ($fullCompleteness['missing'][3] ?? 0) !== 3) {
+    throw new RuntimeException('Expected missing rows for system IDs that were not precomputed.');
 }
 
 echo "Jump neighbor validator test passed.\n";
