@@ -116,6 +116,7 @@ final class NavigationEngine
                 'effective_range_ly' => $effectiveRange,
                 'range_bucket_floor' => $rangeBucketFloor,
                 'range_bucket_clamped' => $rangeBucket,
+                'fatigue_model_version' => JumpFatigueModel::VERSION,
                 'gate_nodes_explored' => $gateRoute['nodes_explored'] ?? 0,
                 'jump_nodes_explored' => $jumpRoute['nodes_explored'] ?? 0,
                 'hybrid_nodes_explored' => $hybridRoute['nodes_explored'] ?? 0,

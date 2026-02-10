@@ -23,3 +23,5 @@ Everoute's capital jump planning follows EVE Online mechanics references:
   - If cumulative fatigue approaches the cap, consider pausing until fatigue drops below 60 minutes to reduce risk labels.
 
 These estimates are deterministic and meant for planning; they should align with CCP guidance for relative comparisons, not serve as an in-client timer replacement.
+
+- Fatigue model version: `phoebe-2018-v1` (used in debug output and route-cache keys).

@@ -60,7 +60,7 @@ final class RouteService
     private function routeCacheKey(array $options): string
     {
         $payload = $options;
-        $payload['fatigue_model_version'] = (string) ($payload['fatigue_model_version'] ?? 'v1');
+        $payload['fatigue_model_version'] = (string) ($payload['fatigue_model_version'] ?? JumpFatigueModel::VERSION);
         $payload['avoid_strictness'] = strtolower((string) ($payload['avoid_strictness'] ?? 'soft'));
         $payload['prefer_npc'] = (bool) ($payload['prefer_npc'] ?? false);
         $payload['hybrid_launch_hops'] = (int) ($payload['hybrid_launch_hops'] ?? 6);
