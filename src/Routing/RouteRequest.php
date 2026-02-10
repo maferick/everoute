@@ -18,6 +18,8 @@ final class RouteRequest
         public readonly string $avoidStrictness,
         public readonly array $avoidSystems,
         public readonly bool $preferNpc,
+        public readonly bool $requireStationMidpoints,
+        public readonly string $stationType,
         public readonly int $npcFallbackMaxExtraJumps,
         public readonly bool $allowGateReposition,
         public readonly int $hybridGateBudgetMax,
@@ -37,6 +39,8 @@ final class RouteRequest
         ?string $avoidStrictness,
         array $avoidSystems,
         bool $preferNpc,
+        bool $requireStationMidpoints = false,
+        ?string $stationType = null,
         ?bool $allowGateReposition = null,
         ?int $hybridGateBudgetMax = null,
         bool $debug = false
@@ -55,6 +59,8 @@ final class RouteRequest
             $resolvedStrictness,
             self::normalizeAvoidSystems($avoidSystems),
             $preferNpc,
+            $requireStationMidpoints,
+            self::normalizeStationType($stationType),
             $npcPolicy['npc_detour_max_extra_jumps'],
             $allowGateReposition ?? true,
             max(2, min(12, (int) ($hybridGateBudgetMax ?? 8))),
@@ -89,6 +95,8 @@ final class RouteRequest
             isset($options['avoid_strictness']) ? (string) $options['avoid_strictness'] : null,
             isset($options['avoid_systems']) && is_array($options['avoid_systems']) ? $options['avoid_systems'] : [],
             (bool) ($options['prefer_npc'] ?? ($ship->mode === 'capital')),
+            (bool) ($options['require_station_midpoints'] ?? ($options['use_stations'] ?? false)),
+            isset($options['station_type']) ? (string) $options['station_type'] : null,
             array_key_exists('allow_gate_reposition', $options) ? (bool) $options['allow_gate_reposition'] : true,
             array_key_exists('hybrid_gate_budget_max', $options) && is_numeric($options['hybrid_gate_budget_max']) ? (int) $options['hybrid_gate_budget_max'] : 8,
             !empty($options['debug'])
@@ -112,6 +120,8 @@ final class RouteRequest
             'avoid_strictness' => $this->avoidStrictness,
             'avoid_systems' => $this->avoidSystems,
             'prefer_npc' => $this->preferNpc,
+            'require_station_midpoints' => $this->requireStationMidpoints,
+            'station_type' => $this->stationType,
             'npc_fallback_max_extra_jumps' => $this->npcFallbackMaxExtraJumps,
             'allow_gate_reposition' => $this->allowGateReposition,
             'hybrid_gate_budget_max' => $this->hybridGateBudgetMax,
@@ -162,6 +172,13 @@ final class RouteRequest
         $normalized = strtolower(trim((string) $strictness));
 
         return in_array($normalized, ['soft', 'strict'], true) ? $normalized : $default;
+    }
+
+    private static function normalizeStationType(?string $stationType): string
+    {
+        $normalized = strtolower(trim((string) $stationType));
+
+        return in_array($normalized, ['npc'], true) ? $normalized : 'npc';
     }
 
     /** @param array<int,mixed> $avoidSystems */

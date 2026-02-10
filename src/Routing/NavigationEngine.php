@@ -740,7 +740,7 @@ final class NavigationEngine
             ];
         }
 
-        $summary = $this->buildJumpRouteSummary($segments, (float) $result['distance'], (int) $result['nodes_explored'], (int) $graph['filtered'], $options);
+        $summary = $this->buildJumpRouteSummary($segments, (float) $result['distance'], (int) $result['nodes_explored'], (int) $graph['filtered'], $options, $endId);
         $summary['min_hops_found'] = $result['min_hops_found'] ?? null;
 
         $npcFallbackDebug = [
@@ -787,7 +787,7 @@ final class NavigationEngine
         return $summary;
     }
 
-    private function buildJumpRouteSummary(array $segments, float $distance, int $nodesExplored, int $filtered, array $options): array
+    private function buildJumpRouteSummary(array $segments, float $distance, int $nodesExplored, int $filtered, array $options, int $endId): array
     {
         $summary = $this->summarizeRoute($segments, $distance);
         $summary['nodes_explored'] = $nodesExplored;
@@ -795,6 +795,8 @@ final class NavigationEngine
         $summary['total_fuel'] = $this->routeFuelTotal($summary, $options);
         $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($segments), $options);
         $summary += $this->buildJumpWaitDetails($segments, $options);
+        $summary += $this->jumpMidpointStationDiagnostics($segments, $options, $endId);
+        $summary['segments'] = $this->annotateStationViolationsOnSegments($summary['segments'] ?? [], $options, $endId);
         return $summary;
     }
 
@@ -811,6 +813,8 @@ final class NavigationEngine
                 'distance' => 0.0,
                 'max_hop' => 0.0,
                 'risk' => 0.0,
+                'station_violations' => 0,
+                'soft_cost' => 0.0,
                 'prev' => null,
             ],
         ];
@@ -833,16 +837,19 @@ final class NavigationEngine
                 $edgeDistance = (float) ($edge['distance_ly'] ?? 0.0);
                 $profile = $this->baseCostProfiles[$to] ?? null;
                 $riskPenalty = (float) ($profile['risk_penalty'] ?? 0.0);
+                $stationViolation = $this->stationMidpointViolationPenalty($to, $endId, $options);
                 $candidate = [
                     'hops' => (int) $current['hops'] + 1,
-                    'distance' => (float) $current['distance'] + $edgeDistance,
+                    'distance' => (float) $current['distance'] + $edgeDistance + $stationViolation['penalty_hops'],
                     'max_hop' => max((float) $current['max_hop'], $edgeDistance),
                     'risk' => (float) $current['risk'] + $riskPenalty,
+                    'station_violations' => (int) $current['station_violations'] + ($stationViolation['is_violation'] ? 1 : 0),
+                    'soft_cost' => (float) $current['soft_cost'] + 1.0 + $stationViolation['penalty_hops'] + ($edgeDistance * 0.01) + ($riskPenalty * 0.05),
                     'prev' => $node,
                 ];
 
                 $existing = $state[$to] ?? null;
-                if ($existing !== null && !$this->isJumpCandidateBetter($candidate, $existing)) {
+                if ($existing !== null && !$this->isJumpCandidateBetter($candidate, $existing, $options)) {
                     continue;
                 }
 
@@ -854,6 +861,7 @@ final class NavigationEngine
                         -((float) $candidate['distance']),
                         -((float) $candidate['max_hop']),
                         -((float) $candidate['risk']),
+                        -((int) $candidate['station_violations']),
                     ]
                 );
             }
@@ -890,15 +898,28 @@ final class NavigationEngine
             'distance' => (float) ($state[$endId]['distance'] ?? INF),
             'nodes_explored' => $nodesExplored,
             'min_hops_found' => (int) ($state[$endId]['hops'] ?? 0),
+            'station_midpoint_violations' => (int) ($state[$endId]['station_violations'] ?? 0),
         ];
     }
 
-    /** @param array{hops:int,distance:float,max_hop:float,risk:float} $candidate @param array{hops:int,distance:float,max_hop:float,risk:float} $existing */
-    private function isJumpCandidateBetter(array $candidate, array $existing): bool
+    /** @param array{hops:int,distance:float,max_hop:float,risk:float,station_violations:int,soft_cost:float} $candidate @param array{hops:int,distance:float,max_hop:float,risk:float,station_violations:int,soft_cost:float} $existing */
+    private function isJumpCandidateBetter(array $candidate, array $existing, array $options): bool
     {
         $tolerance = 1e-9;
+        $useStationSoftCost = !empty($options['require_station_midpoints'])
+            && strtolower((string) ($options['avoid_strictness'] ?? 'soft')) === 'soft';
+
+        if ($useStationSoftCost) {
+            if (abs((float) $candidate['soft_cost'] - (float) $existing['soft_cost']) > $tolerance) {
+                return (float) $candidate['soft_cost'] < (float) $existing['soft_cost'];
+            }
+        }
+
         if ((int) $candidate['hops'] !== (int) $existing['hops']) {
             return (int) $candidate['hops'] < (int) $existing['hops'];
+        }
+        if ((int) $candidate['station_violations'] !== (int) $existing['station_violations']) {
+            return (int) $candidate['station_violations'] < (int) $existing['station_violations'];
         }
         if (abs((float) $candidate['distance'] - (float) $existing['distance']) > $tolerance) {
             return (float) $candidate['distance'] < (float) $existing['distance'];
@@ -3001,11 +3022,97 @@ final class NavigationEngine
             return 'filtered_illegal_security';
         }
 
+        if ($isMidpoint && !empty($options['require_station_midpoints']) && strtolower((string) ($options['avoid_strictness'] ?? 'soft')) === 'strict') {
+            if (empty($system['has_npc_station'])) {
+                return 'filtered_station_midpoint_required';
+            }
+        }
+
         if ($isMidpoint && !empty($options['avoid_systems']) && in_array($system['name'], (array) $options['avoid_systems'], true)) {
             return 'filtered_avoid_list';
         }
 
         return null;
+    }
+
+    /** @return array{is_violation:bool,penalty_hops:float} */
+    private function stationMidpointViolationPenalty(int $systemId, int $endId, array $options): array
+    {
+        if (empty($options['require_station_midpoints'])) {
+            return ['is_violation' => false, 'penalty_hops' => 0.0];
+        }
+
+        if ($systemId === $endId) {
+            return ['is_violation' => false, 'penalty_hops' => 0.0];
+        }
+
+        $system = $this->systems[$systemId] ?? null;
+        if ($system === null || !empty($system['has_npc_station'])) {
+            return ['is_violation' => false, 'penalty_hops' => 0.0];
+        }
+
+        $strictness = strtolower((string) ($options['avoid_strictness'] ?? 'soft'));
+        if ($strictness === 'strict') {
+            return ['is_violation' => true, 'penalty_hops' => INF];
+        }
+
+        return ['is_violation' => true, 'penalty_hops' => 2.0];
+    }
+
+    /** @param array<int, array<string, mixed>> $segments
+     * @return array<int, array<string, mixed>>
+     */
+    private function annotateStationViolationsOnSegments(array $segments, array $options, int $endId): array
+    {
+        if (empty($options['require_station_midpoints']) || strtolower((string) ($options['avoid_strictness'] ?? 'soft')) === 'strict') {
+            return $segments;
+        }
+
+        foreach ($segments as $idx => $segment) {
+            if (($segment['type'] ?? 'gate') !== 'jump') {
+                continue;
+            }
+            $toId = (int) ($segment['to_id'] ?? 0);
+            if ($toId === $endId) {
+                continue;
+            }
+            $system = $this->systems[$toId] ?? null;
+            $segments[$idx]['station_violation'] = $system === null || empty($system['has_npc_station']);
+        }
+
+        return $segments;
+    }
+
+    /** @return array{require_station_midpoints:bool,station_type:string,midpoints_with_station:string,station_midpoint_violations:array<int,string>} */
+    private function jumpMidpointStationDiagnostics(array $segments, array $options, int $endId): array
+    {
+        $totalMidpoints = 0;
+        $stationMidpoints = 0;
+        $violations = [];
+
+        foreach ($segments as $segment) {
+            if (($segment['type'] ?? 'gate') !== 'jump') {
+                continue;
+            }
+            $toId = (int) ($segment['to_id'] ?? 0);
+            if ($toId === $endId) {
+                continue;
+            }
+            $totalMidpoints++;
+            $system = $this->systems[$toId] ?? null;
+            if ($system !== null && !empty($system['has_npc_station'])) {
+                $stationMidpoints++;
+                continue;
+            }
+            $violations[] = (string) ($segment['to'] ?? (string) $toId);
+        }
+
+        return [
+            'require_station_midpoints' => !empty($options['require_station_midpoints']),
+            'station_type' => (string) ($options['station_type'] ?? 'npc'),
+            'midpoints_with_station' => sprintf('%d/%d', $stationMidpoints, $totalMidpoints),
+            'station_midpoint_violations' => $violations,
+        ];
     }
 
     /** @param array<int, array<int, array{to:int,type:string,distance_ly:float}>> $neighbors */

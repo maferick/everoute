@@ -100,6 +100,8 @@ final class ApiController
         $avoidLowsec = $this->validator->bool($body['avoid_lowsec'] ?? null, false);
         $avoidNullsec = $this->validator->bool($body['avoid_nullsec'] ?? null, false);
         $preferNpc = $this->validator->bool($body['prefer_npc_stations'] ?? null, $isCapitalRequest);
+        $requireStationMidpoints = $this->validator->bool($body['require_station_midpoints'] ?? ($body['use_stations'] ?? null), false);
+        $stationType = $this->validator->enum(strtolower((string) ($body['station_type'] ?? 'npc')), ['npc'], 'npc');
         $allowGateReposition = $this->validator->bool($body['allow_gate_reposition'] ?? null, true);
         $hybridGateBudgetMax = $this->validator->int($body['hybrid_gate_budget_max'] ?? null, 2, 12, 8);
 
@@ -130,6 +132,8 @@ final class ApiController
             ),
             isset($body['avoid_specific_systems']) ? $this->validator->list((string) $body['avoid_specific_systems']) : [],
             $preferNpc,
+            $requireStationMidpoints,
+            $stationType,
             $allowGateReposition,
             $hybridGateBudgetMax
         );
