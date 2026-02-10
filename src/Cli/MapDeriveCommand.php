@@ -96,12 +96,12 @@ final class MapDeriveCommand extends Command
         $regionSql = '
             UPDATE systems s
             JOIN (
-                SELECT DISTINCT from_system_id AS system_id
+                SELECT DISTINCT gd.from_system_id AS system_id
                 FROM gate_distances gd
                 JOIN stargates g ON g.from_system_id = gd.to_system_id
                 WHERE gd.hops <= ' . $boundaryRadius . ' AND g.is_region_boundary = 1
                 UNION
-                SELECT DISTINCT to_system_id AS system_id
+                SELECT DISTINCT gd.to_system_id AS system_id
                 FROM gate_distances gd
                 JOIN stargates g ON g.from_system_id = gd.to_system_id
                 WHERE gd.hops <= ' . $boundaryRadius . ' AND g.is_region_boundary = 1
@@ -112,12 +112,12 @@ final class MapDeriveCommand extends Command
         $constellationSql = '
             UPDATE systems s
             JOIN (
-                SELECT DISTINCT from_system_id AS system_id
+                SELECT DISTINCT gd.from_system_id AS system_id
                 FROM gate_distances gd
                 JOIN stargates g ON g.from_system_id = gd.to_system_id
                 WHERE gd.hops <= ' . $boundaryRadius . ' AND g.is_constellation_boundary = 1
                 UNION
-                SELECT DISTINCT to_system_id AS system_id
+                SELECT DISTINCT gd.to_system_id AS system_id
                 FROM gate_distances gd
                 JOIN stargates g ON g.from_system_id = gd.to_system_id
                 WHERE gd.hops <= ' . $boundaryRadius . ' AND g.is_constellation_boundary = 1
