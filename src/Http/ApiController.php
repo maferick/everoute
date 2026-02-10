@@ -90,6 +90,9 @@ final class ApiController
         $preferNpc = $this->validator->bool($body['prefer_npc_stations'] ?? null, $mode === 'capital');
         $npcDetourPolicy = $this->deriveNpcDetourPolicy($safety, $preferNpc);
 
+        $fuelPerLyFactorRaw = $body['fuel_per_ly_factor'] ?? (($body['ship_profile']['fuel_per_ly_factor'] ?? null));
+        $fuelPerLyFactor = is_numeric($fuelPerLyFactorRaw) ? max(0.0, (float) $fuelPerLyFactorRaw) : null;
+
         $options = [
             'from' => $from,
             'to' => $to,
@@ -110,6 +113,7 @@ final class ApiController
             'prefer_npc' => $preferNpc,
             'npc_fallback_max_extra_jumps' => $npcDetourPolicy['npc_detour_max_extra_jumps'],
             'ship_modifier' => $this->shipModifier($shipClass),
+            'fuel_per_ly_factor' => $fuelPerLyFactor,
         ];
 
         $result = $this->routes->computeRoutes($options);
