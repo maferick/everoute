@@ -21,14 +21,19 @@ Everoute is a lightweight PHP 8.3 application with a minimal routing engine.
 
 ## Routing Algorithm
 - Dijkstra on gate graph.
-- Cost = travel + risk + exposure + infrastructure.
+- Per-route scoring uses a slider-derived weighting model (`safety_vs_speed`):
+  - `w_time = 1.2 - 0.7*s`
+  - `w_risk = 0.2 + 1.2*s`
+  - `w_pref = 0.15 + 0.1*s`
+  - where `s = safety_vs_speed / 100`.
+- Route totals are computed as `time_cost*w_time + risk_cost*w_risk + preference_cost*w_pref + npc_bonus`.
 - Three presets re-run with different weight profiles.
 - Capital/JF mode also evaluates jump-only and hybrid (gate-to-launch + jump chain + optional landing gate) plans.
 
 ## Routing Policy (Avoidance + Preferences)
 - **Soft avoidance** (`avoid_strictness=soft`) applies penalties for low/null-sec systems instead of removing them. This is the default for capital and jump planning, so a viable chain can still be found if the only way out crosses low/null-sec.
-- **Strict avoidance** (`avoid_strictness=strict`) removes low/null-sec systems from the candidate set. If no route is feasible, the engine automatically relaxes to soft avoidance and returns `fallback_used=true` for the affected route.
-- **NPC station preference** adds a bonus to systems that have NPC stations; this bonus is applied consistently for gate, jump, and hybrid planners. Gate routing will lean toward NPC-station systems. Jump routing uses the same bonus when evaluating midpoint candidates. Hybrid routing respects the bonus for both the gate launch/landing segments and the jump chain.
+- **Strict avoidance** (`avoid_strictness=strict`) removes low/null-sec systems from the candidate set. If no route is feasible, the engine retries with soft semantics and marks the returned route with `fallback_used=true`, `requested_avoid_strictness=strict`, and `applied_avoid_strictness=soft`.
+- **NPC station preference** (`prefer_npc_stations=true`) applies an explicit negative cost bonus (`npc_bonus`) and a preference component (`preference_cost`) based on NPC-station coverage in the route. The same behavior is used for gate, jump, and hybrid planners.
 - **Hybrid multi-phase planning** evaluates: (1) a gate segment to a launch system, (2) the jump chain, and (3) an optional landing gate segment. If the launch system is in a different region, the planner may add a short gate repositioning step (regional-gate hop) to move across the region boundary before jumping.
 
 ## Jump Fatigue Model (v1)
@@ -42,3 +47,8 @@ Everoute is a lightweight PHP 8.3 application with a minimal routing engine.
 - Top risk systems list.
 - Avoided hotspots versus fastest path.
 - Tradeoff summary and data freshness.
+
+## Hybrid Selection (Speed-Leaning Thresholds)
+- In speed-leaning mode (`safety_vs_speed <= 25`), jump can dominate hybrid when jump `time_cost` is at least 5% better (`jump <= hybrid * 0.95`).
+- If multiple routes are close in time, an extra gate penalty can be added to routes that carry at least 2 extra gates with near-similar time (`time_delta <= 0.1`).
+- Final recommendation is chosen by lowest normalized total cost, and explainability includes `best_selection_reason` plus dominance/penalty flags.

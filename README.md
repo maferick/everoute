@@ -4,8 +4,9 @@ Everoute is a production-ready v1 route planning platform for EVE Online, focuse
 
 ## Features
 - Explainable routing with risk, exposure, and infrastructure tradeoffs.
+- Slider-based speed/safety weighting with per-route score breakdowns.
 - Exposure-time proxy (system size + ship class modifiers).
-- Capital/JF midpoints and NPC station bias.
+- Capital/JF jump + hybrid planning, strict/soft avoid fallback, and NPC station preference behavior.
 - Public JSON API.
 - CLI installer and importers.
 
