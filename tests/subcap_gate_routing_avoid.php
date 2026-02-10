@@ -7,6 +7,7 @@ use Everoute\Risk\RiskRepository;
 use Everoute\Routing\JumpFatigueModel;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\NavigationEngine;
+use Everoute\Routing\RouteRequest;
 use Everoute\Routing\ShipRules;
 use Everoute\Routing\SystemLookup;
 use Everoute\Security\Logger;
@@ -105,7 +106,7 @@ $hsOptions = $baseOptions + [
     'avoid_lowsec' => true,
     'avoid_nullsec' => true,
 ];
-$hsResult = $engine->compute($hsOptions);
+$hsResult = $engine->compute(RouteRequest::fromLegacyOptions($hsOptions));
 $hsGate = $hsResult['gate_route'] ?? [];
 if (empty($hsGate['feasible'])) {
     throw new RuntimeException('HS to HS route should be feasible with avoid flags.');
@@ -125,7 +126,7 @@ $nsToHsOptions = $baseOptions + [
     'avoid_lowsec' => false,
     'avoid_nullsec' => true,
 ];
-$nsToHsResult = $engine->compute($nsToHsOptions);
+$nsToHsResult = $engine->compute(RouteRequest::fromLegacyOptions($nsToHsOptions));
 $nsToHsGate = $nsToHsResult['gate_route'] ?? [];
 if (empty($nsToHsGate['feasible'])) {
     throw new RuntimeException('NS to HS route should be feasible with avoid null.');
@@ -157,7 +158,7 @@ $hsToNsOptions = $baseOptions + [
     'avoid_lowsec' => false,
     'avoid_nullsec' => true,
 ];
-$hsToNsResult = $engine->compute($hsToNsOptions);
+$hsToNsResult = $engine->compute(RouteRequest::fromLegacyOptions($hsToNsOptions));
 $hsToNsGate = $hsToNsResult['gate_route'] ?? [];
 if (empty($hsToNsGate['feasible'])) {
     throw new RuntimeException('HS to NS route should be feasible with avoid null.');

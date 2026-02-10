@@ -8,6 +8,7 @@ use Everoute\Routing\JumpFatigueModel;
 use Everoute\Routing\JumpMath;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\NavigationEngine;
+use Everoute\Routing\RouteRequest;
 use Everoute\Routing\ShipRules;
 use Everoute\Routing\SystemLookup;
 use Everoute\Security\Logger;
@@ -108,7 +109,7 @@ $options = [
     'safety_vs_speed' => 50,
 ];
 
-$result = $engine->compute($options);
+$result = $engine->compute(RouteRequest::fromLegacyOptions($options));
 foreach (['gate_route', 'jump_route', 'hybrid_route'] as $routeKey) {
     $route = $result[$routeKey] ?? [];
     if (empty($route['fallback_used'])) {
@@ -128,7 +129,7 @@ foreach (['gate_route', 'jump_route', 'hybrid_route'] as $routeKey) {
 
 $explicitSoftOptions = $options;
 $explicitSoftOptions['avoid_strictness'] = 'soft';
-$softResult = $engine->compute($explicitSoftOptions);
+$softResult = $engine->compute(RouteRequest::fromLegacyOptions($explicitSoftOptions));
 if (($softResult['gate_route']['requested_avoid_strictness'] ?? '') !== 'soft') {
     throw new RuntimeException('Explicit soft avoid strictness should remain soft in requested strictness metadata.');
 }

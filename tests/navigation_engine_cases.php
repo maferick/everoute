@@ -8,6 +8,7 @@ use Everoute\Routing\JumpFatigueModel;
 use Everoute\Routing\JumpMath;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\NavigationEngine;
+use Everoute\Routing\RouteRequest;
 use Everoute\Routing\ShipRules;
 use Everoute\Routing\SystemLookup;
 use Everoute\Security\Logger;
@@ -186,7 +187,7 @@ $optionsCarrier = [
     'jump_skill_level' => 5,
     'safety_vs_speed' => 50,
 ];
-$resultCarrier = $engine->compute($optionsCarrier);
+$resultCarrier = $engine->compute(RouteRequest::fromLegacyOptions($optionsCarrier));
 $jumpRoute = $resultCarrier['jump_route'] ?? [];
 if (empty($jumpRoute['feasible'])) {
     throw new RuntimeException('Carrier jump route should be feasible.');
@@ -212,7 +213,7 @@ $optionsJf = [
     'jump_skill_level' => 5,
     'safety_vs_speed' => 50,
 ];
-$resultJf = $engine->compute($optionsJf);
+$resultJf = $engine->compute(RouteRequest::fromLegacyOptions($optionsJf));
 $jfJumpRoute = $resultJf['jump_route'] ?? [];
 if (empty($jfJumpRoute['feasible'])) {
     throw new RuntimeException('Jump freighter should be able to land in highsec.');
@@ -231,7 +232,7 @@ $optionsPochven = [
     'jump_skill_level' => 5,
     'safety_vs_speed' => 50,
 ];
-$resultPochven = $engine->compute($optionsPochven);
+$resultPochven = $engine->compute(RouteRequest::fromLegacyOptions($optionsPochven));
 $jumpToPochven = $resultPochven['jump_route'] ?? [];
 if (!empty($jumpToPochven['feasible'])) {
     throw new RuntimeException('Jump route into Pochven must not be feasible.');
@@ -250,7 +251,7 @@ $optionsGateHierarchy = [
     'mode' => 'subcap',
     'safety_vs_speed' => 50,
 ];
-$hierResult = $engine->compute($optionsGateHierarchy);
+$hierResult = $engine->compute(RouteRequest::fromLegacyOptions($optionsGateHierarchy));
 $hierGate = $hierResult['gate_route'] ?? [];
 if (empty($hierGate['feasible'])) {
     throw new RuntimeException('Hierarchical gate route across constellations should be feasible.');
@@ -263,7 +264,7 @@ $pdo->exec('DELETE FROM constellation_edges');
 $pdo->exec('DELETE FROM constellation_portals');
 $pdo->exec('DELETE FROM constellation_dist');
 $engine->refresh();
-$flatResult = $engine->compute($optionsGateHierarchy);
+$flatResult = $engine->compute(RouteRequest::fromLegacyOptions($optionsGateHierarchy));
 $flatGate = $flatResult['gate_route'] ?? [];
 if (empty($flatGate['feasible'])) {
     throw new RuntimeException('Flat gate route should still be feasible after clearing hierarchy tables.');
@@ -279,7 +280,7 @@ $pdo->exec('DELETE FROM jump_constellation_portals');
 $pdo->exec('DELETE FROM jump_constellation_edges');
 $pdo->exec('DELETE FROM jump_midpoint_candidates');
 $engine->refresh();
-$flatJumpResult = $engine->compute($optionsCarrier);
+$flatJumpResult = $engine->compute(RouteRequest::fromLegacyOptions($optionsCarrier));
 $jumpWithoutHierarchy = $flatJumpResult['jump_route'] ?? [];
 $hybridWithoutHierarchy = $flatJumpResult['hybrid_route'] ?? [];
 if (empty($jumpWithoutHierarchy['feasible'])) {

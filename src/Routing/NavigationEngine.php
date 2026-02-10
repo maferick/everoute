@@ -80,8 +80,11 @@ final class NavigationEngine
         $this->loadData();
     }
 
-    public function compute(array $options): array
+    public function compute(array|RouteRequest $request): array
     {
+        $routeRequest = $request instanceof RouteRequest ? $request : RouteRequest::fromLegacyOptions($request);
+        $options = $routeRequest->toLegacyOptions();
+
         $start = $this->systemLookup->resolveByNameOrId($options['from']);
         $end = $this->systemLookup->resolveByNameOrId($options['to']);
 
@@ -90,8 +93,6 @@ final class NavigationEngine
         }
 
         $shipType = $this->resolveShipType($options);
-        $options = $this->withResolvedFuelOptions($options, $shipType);
-        $options = $this->withResolvedPreferenceProfile($options);
         $jumpSkillLevel = (int) ($options['jump_skill_level'] ?? 0);
         $effectiveRange = $this->jumpRangeCalculator->effectiveRange($shipType, $jumpSkillLevel);
         $rangeBucketFloor = $effectiveRange !== null ? (int) floor($effectiveRange) : null;

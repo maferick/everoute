@@ -9,6 +9,7 @@ use Everoute\Routing\JumpMath;
 use Everoute\Routing\JumpPlanner;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\MovementRules;
+use Everoute\Routing\RouteRequest;
 use Everoute\Routing\RouteService;
 use Everoute\Routing\WeightCalculator;
 use Everoute\Security\Logger;
@@ -120,7 +121,7 @@ $options = [
     'ship_modifier' => 1.0,
 ];
 
-$result = $service->computeRoutes($options);
+$result = $service->computeRoutes(RouteRequest::fromLegacyOptions($options));
 $plans = $result['routes']['balanced']['plans'] ?? [];
 $jumpOnly = $plans['jump'] ?? [];
 $hybrid = $plans['hybrid'] ?? [];

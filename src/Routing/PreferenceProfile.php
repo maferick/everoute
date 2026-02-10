@@ -38,6 +38,26 @@ final class PreferenceProfile
         ],
     ];
 
+    public function __construct(
+        public readonly string $name,
+        public readonly int $safetyVsSpeed
+    ) {
+    }
+
+    public static function create(?string $requestedProfile, int $safetyVsSpeed): self
+    {
+        $clampedSafety = max(0, min(100, $safetyVsSpeed));
+        $resolved = self::resolve($requestedProfile, $clampedSafety);
+
+        return new self($resolved, $clampedSafety);
+    }
+
+    /** @return array{base_gate_cost: float, base_jump_cost: float, risk_multiplier: float, sec_band_penalty_multiplier: float, fuel_multiplier: float, per_jump_constant: float} */
+    public function coefficientsForSelection(): array
+    {
+        return self::coefficients($this->name);
+    }
+
     /** @return array{base_gate_cost: float, base_jump_cost: float, risk_multiplier: float, sec_band_penalty_multiplier: float, fuel_multiplier: float, per_jump_constant: float} */
     public static function coefficients(string $profile): array
     {

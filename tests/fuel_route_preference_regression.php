@@ -8,6 +8,7 @@ use Everoute\Routing\JumpFatigueModel;
 use Everoute\Routing\JumpMath;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\NavigationEngine;
+use Everoute\Routing\RouteRequest;
 use Everoute\Routing\ShipRules;
 use Everoute\Routing\SystemLookup;
 use Everoute\Security\Logger;
@@ -131,9 +132,9 @@ $baseOptions = [
     'avoid_strictness' => 'soft',
 ];
 
-$lowFuel = $engine->compute($baseOptions + [
+$lowFuel = $engine->compute(RouteRequest::fromLegacyOptions($baseOptions + [
     'fuel_per_ly_factor' => 0.0,
-]);
+]));
 $lowJump = $lowFuel['jump_route'] ?? [];
 if (empty($lowJump['feasible'])) {
     throw new RuntimeException('Expected low-fuel jump route to be feasible.');
@@ -143,9 +144,9 @@ if (!in_array('LongBridge', $lowRouteSystems, true)) {
     throw new RuntimeException('Expected low-fuel route to prefer fewer jumps through LongBridge.');
 }
 
-$highFuel = $engine->compute($baseOptions + [
+$highFuel = $engine->compute(RouteRequest::fromLegacyOptions($baseOptions + [
     'fuel_per_ly_factor' => 8.0,
-]);
+]));
 $highJump = $highFuel['jump_route'] ?? [];
 if (empty($highJump['feasible'])) {
     throw new RuntimeException('Expected high-fuel jump route to be feasible.');

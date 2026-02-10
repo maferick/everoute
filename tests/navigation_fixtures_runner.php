@@ -8,6 +8,7 @@ use Everoute\Routing\JumpFatigueModel;
 use Everoute\Routing\JumpMath;
 use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Routing\NavigationEngine;
+use Everoute\Routing\RouteRequest;
 use Everoute\Routing\ShipRules;
 use Everoute\Routing\SystemLookup;
 use Everoute\Security\Logger;
@@ -259,7 +260,7 @@ $integrationEngine = new NavigationEngine(
     $logger
 );
 
-$fallbackResult = $integrationEngine->compute([
+$fallbackResult = $integrationEngine->compute(RouteRequest::fromLegacyOptions([
     'from' => 'A-Low',
     'to' => 'C-Low',
     'mode' => 'capital',
@@ -268,7 +269,7 @@ $fallbackResult = $integrationEngine->compute([
     'avoid_lowsec' => true,
     'avoid_nullsec' => true,
     'safety_vs_speed' => 50,
-]);
+]));
 
 assertTrueStrict(!empty($fallbackResult['fallback_warning']), 'Fixture 5 should raise top-level fallback warning.');
 assertTrueStrict(!empty($fallbackResult['dominance_rule_applied']) || empty($fallbackResult['dominance_rule_applied']), 'Fixture 5 should expose dominance telemetry field.');
@@ -320,7 +321,7 @@ $engineNpc = new NavigationEngine(
 );
 $engineNpc->refresh();
 
-$fixture6Speed = $engineNpc->compute([
+$fixture6Speed = $engineNpc->compute(RouteRequest::fromLegacyOptions([
     'from' => 'A-Start',
     'to' => 'B-End',
     'mode' => 'capital',
@@ -329,13 +330,13 @@ $fixture6Speed = $engineNpc->compute([
     'prefer_npc' => true,
     'safety_vs_speed' => 20,
     'debug' => true,
-]);
+]));
 assertSameStrict($fixture6Speed['jump_route']['total_gates'] ?? -1, 0, 'Fixture 6 should remain direct jump path.');
 assertSameStrict(count((array) ($fixture6Speed['jump_route']['segments'] ?? [])), 1, 'Fixture 6 speed-leaning should not allow +1 jump detour.');
 assertTrueStrict(empty($fixture6Speed['jump_route']['npc_fallback_used']), 'Fixture 6 speed-leaning should not use NPC fallback detour.');
 assertSameStrict($fixture6Speed['debug']['jump_origin']['npc_fallback']['reason'] ?? '', 'budget_disallows_extra_jumps', 'Fixture 6 should expose detour budget rejection reason.');
 
-$fixture7Safety = $engineNpc->compute([
+$fixture7Safety = $engineNpc->compute(RouteRequest::fromLegacyOptions([
     'from' => 'A-Start',
     'to' => 'B-End',
     'mode' => 'capital',
@@ -344,7 +345,7 @@ $fixture7Safety = $engineNpc->compute([
     'prefer_npc' => true,
     'safety_vs_speed' => 80,
     'debug' => true,
-]);
+]));
 assertSameStrict(count((array) ($fixture7Safety['jump_route']['segments'] ?? [])), 2, 'Fixture 7 safety-leaning should allow +1 jump detour.');
 assertTrueStrict(!empty($fixture7Safety['jump_route']['npc_fallback_used']), 'Fixture 7 should mark NPC fallback detour usage.');
 assertSameStrict($fixture7Safety['debug']['jump_origin']['npc_fallback']['reason'] ?? '', 'low_npc_coverage', 'Fixture 7 should expose fallback trigger reason.');
