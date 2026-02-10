@@ -97,13 +97,18 @@ final class NavigationEngine
         $jumpRoute = $this->applyRouteScoring($jumpRoute, $weights, $options);
         $hybridRoute = $this->applyRouteScoring($hybridRoute, $weights, $options);
 
-        $best = $this->selectBest($gateRoute, $jumpRoute, $hybridRoute);
-        $explanation = $this->buildExplanation($best, $gateRoute, $jumpRoute, $hybridRoute, $options);
+        $selection = $this->selectBestWithMetadata($gateRoute, $jumpRoute, $hybridRoute, $options);
+        $best = (string) ($selection['best'] ?? 'none');
+        $bestSelectionReason = (string) ($selection['reason'] ?? 'no_feasible_routes');
+        $explanation = $this->buildExplanation($best, $gateRoute, $jumpRoute, $hybridRoute, $options, $bestSelectionReason);
         $payload = [
             'gate_route' => $gateRoute,
             'jump_route' => $jumpRoute,
             'hybrid_route' => $hybridRoute,
             'best' => $best,
+            'best_selection_reason' => $bestSelectionReason,
+            'dominance_rule_applied' => !empty($selection['dominance_rule_applied']),
+            'extra_gate_penalty' => $selection['extra_gate_penalty'] ?? [],
             'explanation' => $explanation,
             'effective_range_ly' => $effectiveRange,
             'scoring' => $weights,
@@ -131,6 +136,9 @@ final class NavigationEngine
                     'jump' => $jumpRoute['illegal_systems_filtered'] ?? 0,
                     'hybrid' => $hybridRoute['illegal_systems_filtered'] ?? 0,
                 ],
+                'best_selection_reason' => $bestSelectionReason,
+                'dominance_rule_applied' => !empty($selection['dominance_rule_applied']),
+                'extra_gate_penalty' => $selection['extra_gate_penalty'] ?? [],
                 'scoring' => $weights,
             ];
             if (isset($jumpRoute['debug']) && is_array($jumpRoute['debug'])) {
@@ -2147,7 +2155,15 @@ final class NavigationEngine
         return $feasibleRoutes;
     }
 
-    private function selectBest(array $gate, array $jump, array $hybrid): string
+    /**
+     * @return array{
+     *     best: string,
+     *     reason: string,
+     *     dominance_rule_applied: bool,
+     *     extra_gate_penalty: array<string, mixed>
+     * }
+     */
+    private function selectBestWithMetadata(array $gate, array $jump, array $hybrid, array $options): array
     {
         $routes = ['gate' => $gate, 'jump' => $jump, 'hybrid' => $hybrid];
         $feasible = [];
@@ -2158,7 +2174,75 @@ final class NavigationEngine
         }
 
         if ($feasible === []) {
-            return 'none';
+            return [
+                'best' => 'none',
+                'reason' => 'no_feasible_routes',
+                'dominance_rule_applied' => false,
+                'extra_gate_penalty' => [],
+            ];
+        }
+
+        $safetyVsSpeed = max(0, min(100, (int) ($options['safety_vs_speed'] ?? 50)));
+        if ($safetyVsSpeed <= 25
+            && !empty($feasible['jump'])
+            && !empty($feasible['hybrid'])
+            && (float) ($feasible['jump']['time_cost'] ?? INF) <= ((float) ($feasible['hybrid']['time_cost'] ?? INF) * 0.95)
+        ) {
+            return [
+                'best' => 'jump',
+                'reason' => 'jump_dominates_hybrid_time_threshold',
+                'dominance_rule_applied' => true,
+                'extra_gate_penalty' => [],
+            ];
+        }
+
+        $extraGatePenalty = [
+            'applied' => false,
+            'speed_leaning' => $safetyVsSpeed <= 25,
+            'penalty_routes' => [],
+            'similar_time_threshold' => 0.1,
+            'min_extra_gates' => 2,
+        ];
+
+        if ($safetyVsSpeed <= 25 && count($feasible) > 1) {
+            $timeSimilarityThreshold = (float) $extraGatePenalty['similar_time_threshold'];
+            $minExtraGates = (int) $extraGatePenalty['min_extra_gates'];
+            foreach ($feasible as $routeKey => $route) {
+                $routeTime = (float) ($route['time_cost'] ?? INF);
+                $routeGates = max(0, (int) ($route['total_gates'] ?? 0));
+                foreach ($feasible as $otherKey => $otherRoute) {
+                    if ($routeKey === $otherKey) {
+                        continue;
+                    }
+                    $otherTime = (float) ($otherRoute['time_cost'] ?? INF);
+                    $otherGates = max(0, (int) ($otherRoute['total_gates'] ?? 0));
+                    if (($routeGates - $otherGates) < $minExtraGates) {
+                        continue;
+                    }
+                    if (($routeTime - $otherTime) > $timeSimilarityThreshold) {
+                        continue;
+                    }
+
+                    $gateDelta = $routeGates - $otherGates;
+                    $timeDelta = max(0.0, $routeTime - $otherTime);
+                    $penalty = round(min(0.2, (0.03 * $gateDelta) + (0.02 * (1.0 - $timeDelta))), 4);
+                    if ($penalty <= 0.0) {
+                        continue;
+                    }
+
+                    $existingPenalty = (float) ($feasible[$routeKey]['selection_penalty'] ?? 0.0);
+                    $feasible[$routeKey]['selection_penalty'] = round($existingPenalty + $penalty, 4);
+                    $feasible[$routeKey]['total_cost'] = round(((float) ($feasible[$routeKey]['total_cost'] ?? INF)) + $penalty, 4);
+                    $extraGatePenalty['applied'] = true;
+                    $extraGatePenalty['penalty_routes'][$routeKey][] = [
+                        'vs_route' => $otherKey,
+                        'gate_delta' => $gateDelta,
+                        'time_delta' => round($timeDelta, 4),
+                        'penalty' => $penalty,
+                    ];
+                    break;
+                }
+            }
         }
 
         $normalized = $this->normalizeRouteTotals($feasible);
@@ -2172,16 +2256,27 @@ final class NavigationEngine
             }
         }
 
-        return $bestRoute;
+        return [
+            'best' => $bestRoute,
+            'reason' => $extraGatePenalty['applied'] ? 'normalized_total_cost_with_extra_gate_penalty' : 'normalized_total_cost',
+            'dominance_rule_applied' => false,
+            'extra_gate_penalty' => $extraGatePenalty,
+        ];
     }
 
-    private function buildExplanation(string $best, array $gate, array $jump, array $hybrid, array $options): array
+    private function buildExplanation(string $best, array $gate, array $jump, array $hybrid, array $options, string $selectionReason): array
     {
         if ($best === 'none') {
             return ['No feasible routes found.'];
         }
         $reasons = [];
-        $reasons[] = sprintf('Selected %s with lowest normalized total cost.', $best);
+        if ($selectionReason === 'jump_dominates_hybrid_time_threshold') {
+            $reasons[] = 'Selected jump due to speed-leaning dominance rule over hybrid.';
+        } elseif ($selectionReason === 'normalized_total_cost_with_extra_gate_penalty') {
+            $reasons[] = sprintf('Selected %s with lowest normalized total cost after extra-gate penalty.', $best);
+        } else {
+            $reasons[] = sprintf('Selected %s with lowest normalized total cost.', $best);
+        }
         if ($best === 'hybrid') {
             $reasons[] = 'Hybrid combines gates and jumps while respecting ship restrictions.';
         }
