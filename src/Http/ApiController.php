@@ -83,6 +83,9 @@ final class ApiController
         $safety = $this->validator->int($body['safety_vs_speed'] ?? null, 0, 100, $mode === 'capital' ? 70 : 50);
         $preference = $this->validator->enum((string) ($body['preference'] ?? 'shorter'), ['shorter', 'safer', 'less_secure'], 'shorter');
         $jumpSkillLevel = $this->validator->int($body['jump_skill_level'] ?? null, 0, 5, 5);
+        $avoidLowsec = $this->validator->bool($body['avoid_lowsec'] ?? null, false);
+        $avoidNullsec = $this->validator->bool($body['avoid_nullsec'] ?? null, false);
+        $defaultStrictness = ($avoidLowsec || $avoidNullsec) ? 'strict' : 'soft';
 
         $options = [
             'from' => $from,
@@ -93,12 +96,12 @@ final class ApiController
             'jump_skill_level' => $jumpSkillLevel,
             'safety_vs_speed' => $safety,
             'preference' => $preference,
-            'avoid_lowsec' => $this->validator->bool($body['avoid_lowsec'] ?? null, false),
-            'avoid_nullsec' => $this->validator->bool($body['avoid_nullsec'] ?? null, false),
+            'avoid_lowsec' => $avoidLowsec,
+            'avoid_nullsec' => $avoidNullsec,
             'avoid_strictness' => $this->validator->enum(
-                strtolower((string) ($body['avoid_strictness'] ?? 'soft')),
+                strtolower((string) ($body['avoid_strictness'] ?? $defaultStrictness)),
                 ['soft', 'strict'],
-                'soft'
+                $defaultStrictness
             ),
             'avoid_systems' => isset($body['avoid_specific_systems']) ? $this->validator->list((string) $body['avoid_specific_systems']) : [],
             'prefer_npc' => $this->validator->bool($body['prefer_npc_stations'] ?? null, $mode === 'capital'),

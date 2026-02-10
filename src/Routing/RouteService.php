@@ -61,7 +61,13 @@ final class RouteService
     {
         $payload = $options;
         $payload['fatigue_model_version'] = (string) ($payload['fatigue_model_version'] ?? JumpFatigueModel::VERSION);
-        $payload['avoid_strictness'] = strtolower((string) ($payload['avoid_strictness'] ?? 'soft'));
+        $avoidLowsec = !empty($payload['avoid_lowsec']);
+        $avoidNullsec = !empty($payload['avoid_nullsec']);
+        $defaultStrictness = ($avoidLowsec || $avoidNullsec) ? 'strict' : 'soft';
+        $payload['avoid_strictness'] = strtolower((string) ($payload['avoid_strictness'] ?? $defaultStrictness));
+        if (!in_array($payload['avoid_strictness'], ['soft', 'strict'], true)) {
+            $payload['avoid_strictness'] = $defaultStrictness;
+        }
         $payload['prefer_npc'] = (bool) ($payload['prefer_npc'] ?? false);
         $payload['hybrid_launch_hops'] = (int) ($payload['hybrid_launch_hops'] ?? 6);
         $payload['hybrid_landing_hops'] = (int) ($payload['hybrid_landing_hops'] ?? 4);
