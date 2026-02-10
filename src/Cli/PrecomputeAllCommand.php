@@ -23,7 +23,8 @@ final class PrecomputeAllCommand extends Command
             ->addOption('resume', null, InputOption::VALUE_NONE, 'Resume heavy jobs from the last checkpoint')
             ->addOption('sleep', null, InputOption::VALUE_REQUIRED, 'Sleep seconds between systems/sources for heavy jobs', '0')
             ->addOption('ranges', null, InputOption::VALUE_REQUIRED, 'Comma-separated LY ranges for jump:precompute')
-            ->addOption('max-hops', null, InputOption::VALUE_REQUIRED, 'Maximum hops for precompute:gate-distances', '20');
+            ->addOption('max-hops', null, InputOption::VALUE_REQUIRED, 'Maximum hops for precompute:gate-distances', '20')
+            ->addOption('include-wormholes', null, InputOption::VALUE_NONE, 'Include wormhole and non-normal-universe systems in heavy precompute jobs');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -39,6 +40,7 @@ final class PrecomputeAllCommand extends Command
         $sleep = (string) $input->getOption('sleep');
         $ranges = trim((string) $input->getOption('ranges'));
         $maxHops = (string) $input->getOption('max-hops');
+        $includeWormholes = (bool) $input->getOption('include-wormholes');
 
         $steps = [
             ['command' => 'precompute:system-facts', 'args' => []],
@@ -62,6 +64,13 @@ final class PrecomputeAllCommand extends Command
 
         if ($ranges !== '') {
             $steps[3]['args']['--ranges'] = $ranges;
+        }
+
+        if ($includeWormholes) {
+            $steps[0]['args']['--include-wormholes'] = true;
+            $steps[1]['args']['--include-wormholes'] = true;
+            $steps[2]['args']['--include-wormholes'] = true;
+            $steps[3]['args']['--include-wormholes'] = true;
         }
 
         if ($resume) {

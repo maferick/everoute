@@ -8,6 +8,7 @@ Everoute is a production-ready v1 route planning platform for EVE Online, focuse
 - Capital/JF midpoints and NPC station bias.
 - Public JSON API.
 - CLI installer and importers.
+- Wormhole / non-standard space is excluded from default graph and precompute outputs for stable k-space routing (opt-in flags can re-include it).
 
 ## Quick Start
 ```bash

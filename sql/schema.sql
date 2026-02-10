@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS systems (
     security_nav DECIMAL(4,2) NOT NULL,
     region_id BIGINT NULL,
     constellation_id BIGINT NULL,
+    is_wormhole TINYINT(1) NOT NULL DEFAULT 0,
+    is_normal_universe TINYINT(1) NOT NULL DEFAULT 0,
     has_npc_station TINYINT(1) NOT NULL DEFAULT 0,
     npc_station_count INT NOT NULL DEFAULT 0,
     x DOUBLE NOT NULL DEFAULT 0,

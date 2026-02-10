@@ -30,7 +30,8 @@ final class PrecomputeJumpNeighborsCommand extends Command
             ->addOption('hours', null, InputOption::VALUE_REQUIRED, 'Stop after N hours (0 = no limit)', '1')
             ->addOption('ranges', null, InputOption::VALUE_REQUIRED, 'Comma-separated LY ranges to compute (default config)')
             ->addOption('resume', null, InputOption::VALUE_NONE, 'Resume from last checkpoint')
-            ->addOption('sleep', null, InputOption::VALUE_REQUIRED, 'Sleep seconds between systems', '0');
+            ->addOption('sleep', null, InputOption::VALUE_REQUIRED, 'Sleep seconds between systems', '0')
+            ->addOption('include-wormholes', null, InputOption::VALUE_NONE, 'Include wormhole and non-normal-universe systems');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -39,6 +40,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
         $resume = (bool) $input->getOption('resume');
         $sleepSeconds = (float) $input->getOption('sleep');
         $rangeOption = (string) $input->getOption('ranges');
+        $includeWormholes = (bool) $input->getOption('include-wormholes');
 
         $connection = $this->connection();
         $pdo = $connection->pdo();
@@ -63,7 +65,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
             return Command::FAILURE;
         }
 
-        $systems = $this->loadSystems($connection);
+        $systems = $this->loadSystems($connection, $includeWormholes);
         $systemIds = array_keys($systems);
         $totalSystems = count($systemIds);
         if ($totalSystems === 0) {
@@ -207,11 +209,11 @@ final class PrecomputeJumpNeighborsCommand extends Command
     }
 
     /** @return array<int, array{id:int,x:float,y:float,z:float,security:float,name:string,region_id:int|null,has_npc_station:int,npc_station_count:int,system_size_au:float}> */
-    private function loadSystems(\Everoute\DB\Connection $connection): array
+    private function loadSystems(\Everoute\DB\Connection $connection, bool $includeWormholes = false): array
     {
         $systems = [];
         $repo = new SystemRepository($connection);
-        foreach ($repo->listForRouting() as $system) {
+        foreach ($repo->listForRouting($includeWormholes) as $system) {
             $systemId = (int) $system['id'];
             $system['id'] = $systemId;
             $systems[$systemId] = $system;
