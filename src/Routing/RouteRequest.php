@@ -97,7 +97,9 @@ final class RouteRequest
             (bool) ($options['prefer_npc'] ?? ($ship->mode === 'capital')),
             (bool) ($options['require_station_midpoints'] ?? ($options['use_stations'] ?? false)),
             isset($options['station_type']) ? (string) $options['station_type'] : null,
-            array_key_exists('allow_gate_reposition', $options) ? (bool) $options['allow_gate_reposition'] : true,
+            array_key_exists('allow_gate_reposition_before_first_jump', $options)
+                ? (bool) $options['allow_gate_reposition_before_first_jump']
+                : (array_key_exists('allow_gate_reposition', $options) ? (bool) $options['allow_gate_reposition'] : true),
             array_key_exists('hybrid_gate_budget_max', $options) && is_numeric($options['hybrid_gate_budget_max']) ? (int) $options['hybrid_gate_budget_max'] : 8,
             !empty($options['debug'])
         );
@@ -124,6 +126,7 @@ final class RouteRequest
             'station_type' => $this->stationType,
             'npc_fallback_max_extra_jumps' => $this->npcFallbackMaxExtraJumps,
             'allow_gate_reposition' => $this->allowGateReposition,
+            'allow_gate_reposition_before_first_jump' => $this->allowGateReposition,
             'hybrid_gate_budget_max' => $this->hybridGateBudgetMax,
             'ship_modifier' => $this->ship->shipModifier,
             'fuel_per_ly_factor' => $this->ship->fuelPerLyFactor,

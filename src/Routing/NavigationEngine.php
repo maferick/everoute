@@ -1367,15 +1367,18 @@ final class NavigationEngine
             ];
         }
 
-        $allowGateReposition = !array_key_exists('allow_gate_reposition', $options) || !empty($options['allow_gate_reposition']);
+        $allowGateRepositionBeforeFirstJump = !array_key_exists('allow_gate_reposition_before_first_jump', $options)
+            ? (!array_key_exists('allow_gate_reposition', $options) || !empty($options['allow_gate_reposition']))
+            : !empty($options['allow_gate_reposition_before_first_jump']);
         $hybridGateBudgetMax = max(0, min(12, (int) ($options['hybrid_gate_budget_max'] ?? 8)));
-        $launchHopLimit = $allowGateReposition ? $hybridGateBudgetMax : 0;
+        $hybridGateBudgetApplied = $allowGateRepositionBeforeFirstJump ? $hybridGateBudgetMax : 0;
+        $hybridEnabled = $allowGateRepositionBeforeFirstJump && $hybridGateBudgetApplied > 0;
+        $launchHopLimit = $hybridGateBudgetApplied;
         $landingHopLimit = max(0, min(10, (int) ($options['hybrid_landing_hops'] ?? 4)));
         $launchCandidateLimit = max(1, min(200, (int) ($options['hybrid_launch_candidate_limit'] ?? 50)));
         $landingCandidateLimit = max(1, min(200, (int) ($options['hybrid_landing_candidate_limit'] ?? 25)));
         $maxJumpHops = max(1, min(20, (int) ($options['hybrid_max_jump_hops'] ?? 6)));
         $maxCandidateExpansions = max(1, min(5000, (int) ($options['hybrid_max_candidate_expansions'] ?? 200)));
-        $minSegmentBenefitHops = max(0, (int) ($options['hybrid_min_segment_benefit_hops'] ?? 1));
         $minHybridSelectionImprovement = max(0.0, (float) ($options['hybrid_min_selection_improvement'] ?? 0.01));
 
         $hopsToEnd = $this->buildGateHopMap($endId, $shipType, $options, $this->reverseAdjacency);
@@ -1389,11 +1392,10 @@ final class NavigationEngine
             $endId,
             $shipType,
             $options,
+            $hybridEnabled,
             $launchHopLimit,
             $launchCandidateLimit,
             $hopsToEnd,
-            $baselineGateHops,
-            $minSegmentBenefitHops,
             $jumpNeighbors
         );
         if ($launchCandidates === []) {
@@ -1404,8 +1406,9 @@ final class NavigationEngine
                 'illegal_systems_filtered' => 0,
                 'hybrid_launch_candidates' => 0,
                 'hybrid_gate_budget_configured' => $hybridGateBudgetMax,
-                'hybrid_gate_budget_applied' => $launchHopLimit,
+                'hybrid_gate_budget_applied' => $hybridGateBudgetApplied,
                 'hybrid_gate_budget_used_depth' => (int) ($this->lastHybridCandidateDebug['bfs_depth_reached'] ?? 0),
+                'hybrid_enabled' => $hybridEnabled,
                 'hybrid_candidate_debug' => $this->lastHybridCandidateDebug,
             ];
         }
@@ -1417,7 +1420,7 @@ final class NavigationEngine
             $landingHopLimit,
             $hopsFromStart,
             $baselineGateHops,
-            $minSegmentBenefitHops,
+            max(0, (int) ($options['hybrid_min_segment_benefit_hops'] ?? 1)),
             $landingCandidateLimit
         );
         if ($landingCandidates === []) {
@@ -1581,6 +1584,7 @@ final class NavigationEngine
                 'reason' => $stopReason !== '' ? $stopReason : 'No hybrid route found.',
                 'nodes_explored' => $nodesExplored,
                 'illegal_systems_filtered' => 0,
+                'hybrid_enabled' => $hybridEnabled,
                 'hybrid_candidate_debug' => $this->lastHybridCandidateDebug,
             ];
         }
@@ -1596,7 +1600,7 @@ final class NavigationEngine
         ];
         $bestPlan['hybrid_launch_candidates'] = count($launchCandidates);
         $bestPlan['hybrid_gate_budget_configured'] = $hybridGateBudgetMax;
-        $bestPlan['hybrid_gate_budget_applied'] = $launchHopLimit;
+        $bestPlan['hybrid_gate_budget_applied'] = $hybridGateBudgetApplied;
         $bestPlan['hybrid_gate_budget_used_depth'] = (int) ($this->lastHybridCandidateDebug['bfs_depth_reached'] ?? 0);
         $topLaunch = array_slice(array_map(static function (array $candidate): array {
             return [
@@ -1607,6 +1611,7 @@ final class NavigationEngine
             ];
         }, $launchCandidates), 0, 5);
         $bestPlan['hybrid_top_launch_candidates'] = $topLaunch;
+        $bestPlan['hybrid_enabled'] = $hybridEnabled;
         $bestPlan['hybrid_candidate_debug'] = $this->lastHybridCandidateDebug;
         $bestPlan['hybrid_explainability']['baseline_comparison'] = $bestPlan['baseline_time_costs'];
 
@@ -3244,11 +3249,10 @@ final class NavigationEngine
         int $endId,
         string $shipType,
         array $options,
+        bool $hybridEnabled,
         int $maxHops,
         int $limit,
         array $hopsToEnd,
-        ?int $baselineGateHops,
-        int $minSegmentBenefitHops,
         ?array $jumpNeighbors = null
     ): array {
         $startSystem = $this->systems[$startId] ?? null;
@@ -3264,6 +3268,7 @@ final class NavigationEngine
         $prev = [$startId => null];
         $frontierPerDepth = [1];
         $debug = [
+            'hybrid_enabled' => $hybridEnabled,
             'bfs_visited_total' => 0,
             'bfs_depth_reached' => 0,
             'bfs_frontier_count_per_depth' => $frontierPerDepth,
@@ -3371,14 +3376,9 @@ final class NavigationEngine
                 + $legalPenalty;
 
             $gatePath = $this->buildGatePathFromPrev($prev, (int) $systemId);
-            $remainingGateHops = $hopsToEnd[$systemId] ?? null;
-            $benefitHops = null;
-            if ($baselineGateHops !== null && $remainingGateHops !== null) {
-                $benefitHops = $baselineGateHops - ((int) $gateHops + (int) $remainingGateHops);
-                if ($benefitHops < $minSegmentBenefitHops) {
-                    $debug['filter_reasons_count']['filtered_candidate_disabled_by_setting']++;
-                    continue;
-                }
+            if (!$hybridEnabled) {
+                $debug['filter_reasons_count']['filtered_candidate_disabled_by_setting']++;
+                continue;
             }
 
             $choiceDetails = [
@@ -3388,7 +3388,7 @@ final class NavigationEngine
                 'gate_hops' => (int) $gateHops,
                 'strict_legal' => $strictLegal,
                 'has_npc_station' => !empty($system['has_npc_station']) || (int) ($system['npc_station_count'] ?? 0) > 0,
-                'projected_gate_progress_hops' => $benefitHops,
+                'projected_gate_progress_hops' => null,
             ];
 
             $candidates[] = [
