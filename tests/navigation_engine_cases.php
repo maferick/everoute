@@ -35,8 +35,11 @@ if (file_exists($autoload)) {
     require_once __DIR__ . '/../src/Security/Logger.php';
     require_once __DIR__ . '/../src/Universe/JumpNeighborCodec.php';
     require_once __DIR__ . '/../src/Universe/JumpNeighborRepository.php';
+    require_once __DIR__ . '/../src/Universe/ConstellationGraphRepository.php';
     require_once __DIR__ . '/../src/Universe/StargateRepository.php';
     require_once __DIR__ . '/../src/Universe/SystemRepository.php';
+    require_once __DIR__ . '/../src/Universe/StaticTableResolver.php';
+    require_once __DIR__ . '/../src/Universe/StaticMetaRepository.php';
     require_once __DIR__ . '/../src/Risk/RiskRepository.php';
     require_once __DIR__ . '/../src/Risk/RiskScorer.php';
 }
@@ -49,9 +52,14 @@ if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
 $connection = new Connection('sqlite::memory:', '', '');
 $pdo = $connection->pdo();
 $pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, security_raw REAL, security_nav REAL, region_id INTEGER, constellation_id INTEGER, is_wormhole INTEGER, is_normal_universe INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
-$pdo->exec('CREATE TABLE stargates (from_system_id INTEGER, to_system_id INTEGER, is_regional_gate INTEGER)');
+$pdo->exec('CREATE TABLE stargates (id INTEGER PRIMARY KEY AUTOINCREMENT, from_system_id INTEGER, to_system_id INTEGER, is_regional_gate INTEGER, is_constellation_boundary INTEGER DEFAULT 0, is_region_boundary INTEGER DEFAULT 0)');
+$pdo->exec('CREATE TABLE constellation_portals (constellation_id INTEGER, system_id INTEGER, has_region_boundary INTEGER, PRIMARY KEY (constellation_id, system_id))');
+$pdo->exec('CREATE TABLE constellation_edges (from_constellation_id INTEGER, to_constellation_id INTEGER, from_system_id INTEGER, to_system_id INTEGER, is_region_boundary INTEGER, PRIMARY KEY (from_constellation_id, to_constellation_id, from_system_id, to_system_id))');
+$pdo->exec('CREATE TABLE constellation_dist (constellation_id INTEGER, portal_system_id INTEGER, system_id INTEGER, gate_dist INTEGER, PRIMARY KEY (constellation_id, portal_system_id, system_id))');
 $pdo->exec('CREATE TABLE system_risk (system_id INTEGER, ship_kills_1h INTEGER, pod_kills_1h INTEGER, npc_kills_1h INTEGER, updated_at TEXT, risk_updated_at TEXT, kills_last_1h INTEGER, kills_last_24h INTEGER, pod_kills_last_1h INTEGER, pod_kills_last_24h INTEGER, last_updated_at TEXT)');
 $pdo->exec('CREATE TABLE jump_neighbors (system_id INTEGER, range_ly INTEGER, neighbor_count INTEGER, neighbor_ids_blob BLOB, encoding_version INTEGER, updated_at TEXT)');
+$pdo->exec('CREATE TABLE static_meta (id INTEGER PRIMARY KEY, active_sde_build_number INTEGER, precompute_version INTEGER, built_at TEXT, active_build_id TEXT)');
+$pdo->exec("INSERT INTO static_meta (id, active_sde_build_number, precompute_version, built_at, active_build_id) VALUES (1, NULL, 1, datetime('now'), NULL)");
 
 $metersPerLy = JumpMath::METERS_PER_LY;
 $systems = [
@@ -68,6 +76,33 @@ foreach ($systems as $system) {
     $pdo->prepare('INSERT INTO system_risk VALUES (?, 0, 0, 0, ?, ?, 0, 0, 0, 0, ?)')
         ->execute([$system[0], gmdate('c'), gmdate('c'), gmdate('c')]);
 }
+$gateStmt = $pdo->prepare('INSERT INTO stargates (from_system_id, to_system_id, is_regional_gate, is_constellation_boundary, is_region_boundary) VALUES (?, ?, 0, ?, ?)');
+$gateRows = [
+    [1, 2, 0, 0], [2, 1, 0, 0],
+    [2, 3, 0, 0], [3, 2, 0, 0],
+    [2, 4, 0, 0], [4, 2, 0, 0],
+    [4, 5, 0, 0], [5, 4, 0, 0],
+    [5, 3, 0, 0], [3, 5, 0, 0],
+    [3, 6, 1, 1], [6, 3, 1, 1],
+];
+foreach ($gateRows as [$from, $to, $isConstellationBoundary, $isRegionBoundary]) {
+    $gateStmt->execute([$from, $to, $isConstellationBoundary, $isRegionBoundary]);
+}
+
+$pdo->exec("INSERT INTO constellation_edges VALUES
+    (10, 70, 3, 6, 1),
+    (70, 10, 6, 3, 1)");
+$pdo->exec("INSERT INTO constellation_portals VALUES
+    (10, 3, 1),
+    (70, 6, 1)");
+$pdo->exec("INSERT INTO constellation_dist VALUES
+    (10, 3, 1, 2),
+    (10, 3, 2, 1),
+    (10, 3, 3, 0),
+    (10, 3, 4, 2),
+    (10, 3, 5, 1),
+    (70, 6, 6, 0)");
+
 
 function packNeighbors(array $neighborIds): string
 {
@@ -180,6 +215,36 @@ if (!empty($jumpToPochven['feasible'])) {
 $hybridToPochven = $resultPochven['hybrid_route'] ?? [];
 if (!empty($hybridToPochven['feasible'])) {
     throw new RuntimeException('Hybrid route with jump segment into Pochven must not be feasible.');
+}
+
+
+
+$optionsGateHierarchy = [
+    'from' => '1-SMEB',
+    'to' => 'Pochven-A',
+    'mode' => 'subcap',
+    'safety_vs_speed' => 50,
+];
+$hierResult = $engine->compute($optionsGateHierarchy);
+$hierGate = $hierResult['gate_route'] ?? [];
+if (empty($hierGate['feasible'])) {
+    throw new RuntimeException('Hierarchical gate route across constellations should be feasible.');
+}
+if (($hierGate['hierarchy']['kind'] ?? null) !== 'constellation') {
+    throw new RuntimeException('Expected constellation hierarchy routing metadata on cross-constellation path.');
+}
+
+$pdo->exec('DELETE FROM constellation_edges');
+$pdo->exec('DELETE FROM constellation_portals');
+$pdo->exec('DELETE FROM constellation_dist');
+$engine->refresh();
+$flatResult = $engine->compute($optionsGateHierarchy);
+$flatGate = $flatResult['gate_route'] ?? [];
+if (empty($flatGate['feasible'])) {
+    throw new RuntimeException('Flat gate route should still be feasible after clearing hierarchy tables.');
+}
+if ((int) ($hierGate['nodes_explored'] ?? 0) >= (int) ($flatGate['nodes_explored'] ?? PHP_INT_MAX)) {
+    throw new RuntimeException('Hierarchical route should explore fewer nodes than flat route.');
 }
 
 echo "Navigation engine cases passed.\n";

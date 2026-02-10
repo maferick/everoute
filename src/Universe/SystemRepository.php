@@ -14,6 +14,12 @@ final class SystemRepository
     {
     }
 
+
+    public function connection(): Connection
+    {
+        return $this->connection;
+    }
+
     public function findByNameOrId(string $value): ?array
     {
         $pdo = $this->connection->pdo();

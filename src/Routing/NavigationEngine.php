@@ -8,6 +8,7 @@ use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
 use Everoute\Risk\RiskScorer;
 use Everoute\Security\Logger;
+use Everoute\Universe\ConstellationGraphRepository;
 use Everoute\Universe\JumpNeighborRepository;
 use Everoute\Universe\StargateRepository;
 use Everoute\Universe\SystemRepository;
@@ -35,6 +36,12 @@ final class NavigationEngine
      * }>
      */
     private array $baseCostProfiles = [];
+    /** @var array<int, array<int, array{to_constellation_id:int,from_system_id:int,to_system_id:int,is_region_boundary:bool}>> */
+    private array $constellationEdges = [];
+    /** @var array<int, array<int, array{system_id:int,has_region_boundary:bool}>> */
+    private array $constellationPortals = [];
+    /** @var array<int, array<int, int>> */
+    private array $constellationDistances = [];
     private RiskScorer $riskScorer;
 
     public function __construct(
@@ -46,9 +53,11 @@ final class NavigationEngine
         private JumpFatigueModel $fatigueModel,
         private ShipRules $shipRules,
         private SystemLookup $systemLookup,
-        private Logger $logger
+        private Logger $logger,
+        private ?ConstellationGraphRepository $constellationGraphRepo = null
     ) {
         $this->riskScorer = new RiskScorer();
+        $this->constellationGraphRepo ??= new ConstellationGraphRepository($this->systemsRepo->connection());
         $this->loadData();
     }
 
@@ -214,6 +223,11 @@ final class NavigationEngine
     private function computeGateRouteAttempt(int $startId, int $endId, string $shipType, array $options): array
     {
         $preference = $this->normalizeGatePreference($options);
+        $hierarchicalRoute = $this->computeHierarchicalGateRoute($startId, $endId, $shipType, $options, $preference);
+        if ($hierarchicalRoute !== null) {
+            return $hierarchicalRoute;
+        }
+
         if ($startId === $endId) {
             return [
                 'feasible' => true,
@@ -1103,6 +1117,223 @@ final class NavigationEngine
         }
 
         return ['neighbors' => $neighbors, 'filtered' => $filtered];
+    }
+
+    private function computeHierarchicalGateRoute(int $startId, int $endId, string $shipType, array $options, string $preference): ?array
+    {
+        $startConstellationId = (int) ($this->systems[$startId]['constellation_id'] ?? 0);
+        $endConstellationId = (int) ($this->systems[$endId]['constellation_id'] ?? 0);
+        if ($startConstellationId === 0 || $endConstellationId === 0) {
+            return null;
+        }
+
+        $graph = $this->buildGateGraph($startId, $endId, $shipType, $options);
+        $neighbors = $graph['neighbors'];
+        $filtered = (int) ($graph['filtered'] ?? 0);
+        if (!isset($neighbors[$startId]) || !isset($neighbors[$endId])) {
+            return null;
+        }
+
+        if ($startConstellationId === $endConstellationId) {
+            $allowed = [];
+            foreach ($this->systems as $systemId => $system) {
+                if ((int) ($system['constellation_id'] ?? 0) === $startConstellationId) {
+                    $allowed[(int) $systemId] = true;
+                }
+            }
+            return $this->runGateDijkstra($neighbors, $startId, $endId, $shipType, $options, $preference, $filtered, $allowed, ['kind' => 'local']);
+        }
+
+        if ($this->constellationEdges === []) {
+            return null;
+        }
+        $constellationPath = $this->constellationPath($startConstellationId, $endConstellationId);
+        if (count($constellationPath) < 2) {
+            return null;
+        }
+
+        $stitched = [$startId];
+        $nodesExplored = 0;
+        $currentSystem = $startId;
+        for ($i = 0; $i < count($constellationPath) - 1; $i++) {
+            $fromConstellation = $constellationPath[$i];
+            $toConstellation = $constellationPath[$i + 1];
+            $edge = $this->pickConstellationEdge($fromConstellation, $toConstellation, $currentSystem);
+            if ($edge === null) {
+                return null;
+            }
+
+            $allowedFrom = $this->allowedConstellationSet($fromConstellation);
+            $segmentResult = $this->runGateDijkstraRaw($neighbors, $currentSystem, $edge['from_system_id'], $options, $preference, $allowedFrom);
+            $nodesExplored += $segmentResult['nodes_explored'];
+            if ($segmentResult['path'] === [] || ($segmentResult['path'][count($segmentResult['path']) - 1] ?? null) !== $edge['from_system_id']) {
+                return null;
+            }
+            $stitched = array_merge($stitched, array_slice($segmentResult['path'], 1));
+            $stitched[] = $edge['to_system_id'];
+            $currentSystem = $edge['to_system_id'];
+        }
+
+        $allowedEnd = $this->allowedConstellationSet($endConstellationId);
+        $finalResult = $this->runGateDijkstraRaw($neighbors, $currentSystem, $endId, $options, $preference, $allowedEnd);
+        $nodesExplored += $finalResult['nodes_explored'];
+        if ($finalResult['path'] === [] || ($finalResult['path'][count($finalResult['path']) - 1] ?? null) !== $endId) {
+            return null;
+        }
+        $stitched = array_merge($stitched, array_slice($finalResult['path'], 1));
+
+        $edges = array_fill(0, max(0, count($stitched) - 1), ['type' => 'gate']);
+        $segments = $this->buildSegments($stitched, $edges, $shipType);
+        if (!$this->validateRoute($segments, $shipType, null)) {
+            return [
+                'feasible' => false,
+                'reason' => 'Gate route failed validation.',
+                'nodes_explored' => $result['nodes_explored'],
+                'illegal_systems_filtered' => $filtered,
+                'preference' => $preference,
+                'penalty' => 0.0,
+                'avoid_flags' => $this->buildAvoidFlags($options),
+                'exception_corridor' => ['start' => ['required' => false, 'hops' => 0], 'destination' => ['required' => false, 'hops' => 0]],
+            ];
+        }
+        $distance = 0.0;
+        for ($i = 1; $i < count($stitched); $i++) {
+            $distance += $this->gateStepWeight($stitched[$i - 1], $stitched[$i], $options, $preference);
+        }
+
+        $summary = $this->summarizeRoute($segments, $distance);
+        $summary['nodes_explored'] = $nodesExplored;
+        $summary['illegal_systems_filtered'] = $filtered;
+        $summary['preference'] = $preference;
+        $summary['penalty'] = $this->routeSecurityPenalty($summary['systems'] ?? []);
+        $summary['avoid_flags'] = $this->buildAvoidFlags($options);
+        $summary['exception_corridor'] = [
+            'start' => ['required' => false, 'hops' => 0],
+            'destination' => ['required' => false, 'hops' => 0],
+        ];
+        $summary['hierarchy'] = ['kind' => 'constellation', 'constellation_path' => $constellationPath];
+
+        return $summary;
+    }
+
+    private function gateStepWeight(int $from, int $to, array $options, string $preference): float
+    {
+        $profile = $this->baseCostProfiles[$to] ?? null;
+        if ($profile === null) {
+            return INF;
+        }
+        return $this->gateStepCost($preference, $profile)
+            + $this->npcStationStepBonus($profile, $options)
+            + $this->avoidPenalty($profile, $options);
+    }
+
+    private function runGateDijkstraRaw(array $neighbors, int $startId, int $endId, array $options, string $preference, ?array $allowed = null): array
+    {
+        $dijkstra = new Dijkstra();
+        return $dijkstra->shortestPath(
+            $neighbors,
+            $startId,
+            $endId,
+            fn (int $from, int $to): float => $this->gateStepWeight($from, $to, $options, $preference),
+            null,
+            $allowed,
+            50000
+        );
+    }
+
+    private function runGateDijkstra(array $neighbors, int $startId, int $endId, string $shipType, array $options, string $preference, int $filtered, ?array $allowed, array $hierarchy): array
+    {
+        $result = $this->runGateDijkstraRaw($neighbors, $startId, $endId, $options, $preference, $allowed);
+        if ($result['path'] === [] || ($result['path'][count($result['path']) - 1] ?? null) !== $endId) {
+            return [
+                'feasible' => false,
+                'reason' => 'No gate route found.',
+                'nodes_explored' => $result['nodes_explored'],
+                'illegal_systems_filtered' => $filtered,
+                'preference' => $preference,
+                'penalty' => 0.0,
+                'avoid_flags' => $this->buildAvoidFlags($options),
+                'exception_corridor' => ['start' => ['required' => false, 'hops' => 0], 'destination' => ['required' => false, 'hops' => 0]],
+            ];
+        }
+        $segments = $this->buildSegments($result['path'], $result['edges'], $shipType);
+        if (!$this->validateRoute($segments, $shipType, null)) {
+            return null;
+        }
+        $summary = $this->summarizeRoute($segments, (float) $result['distance']);
+        $summary['nodes_explored'] = $result['nodes_explored'];
+        $summary['illegal_systems_filtered'] = $filtered;
+        $summary['preference'] = $preference;
+        $summary['penalty'] = $this->routeSecurityPenalty($summary['systems'] ?? []);
+        $summary['avoid_flags'] = $this->buildAvoidFlags($options);
+        $summary['exception_corridor'] = ['start' => ['required' => false, 'hops' => 0], 'destination' => ['required' => false, 'hops' => 0]];
+        $summary['hierarchy'] = $hierarchy;
+        return $summary;
+    }
+
+    /** @return int[] */
+    private function constellationPath(int $startConstellationId, int $endConstellationId): array
+    {
+        $queue = new \SplQueue();
+        $queue->enqueue($startConstellationId);
+        $seen = [$startConstellationId => true];
+        $prev = [];
+        while (!$queue->isEmpty()) {
+            $current = (int) $queue->dequeue();
+            if ($current === $endConstellationId) {
+                break;
+            }
+            foreach ($this->constellationEdges[$current] ?? [] as $edge) {
+                $next = (int) $edge['to_constellation_id'];
+                if (isset($seen[$next])) {
+                    continue;
+                }
+                $seen[$next] = true;
+                $prev[$next] = $current;
+                $queue->enqueue($next);
+            }
+        }
+        if (!isset($seen[$endConstellationId])) {
+            return [];
+        }
+        $path = [$endConstellationId];
+        $cursor = $endConstellationId;
+        while (isset($prev[$cursor])) {
+            $cursor = $prev[$cursor];
+            array_unshift($path, $cursor);
+        }
+        return $path;
+    }
+
+    private function pickConstellationEdge(int $fromConstellationId, int $toConstellationId, int $fromSystemId): ?array
+    {
+        $best = null;
+        $bestDist = PHP_INT_MAX;
+        $distances = $this->constellationDistances[$fromConstellationId] ?? [];
+        foreach ($this->constellationEdges[$fromConstellationId] ?? [] as $edge) {
+            if ((int) $edge['to_constellation_id'] !== $toConstellationId) {
+                continue;
+            }
+            $candidateFromSystem = (int) $edge['from_system_id'];
+            $distance = $distances[$candidateFromSystem][$fromSystemId] ?? PHP_INT_MAX;
+            if ($distance < $bestDist) {
+                $bestDist = $distance;
+                $best = $edge;
+            }
+        }
+        return $best;
+    }
+
+    /** @return array<int, bool> */
+    private function allowedConstellationSet(int $constellationId): array
+    {
+        $allowed = [];
+        foreach ($this->systems as $systemId => $system) {
+            if ((int) ($system['constellation_id'] ?? 0) === $constellationId) {
+                $allowed[(int) $systemId] = true;
+            }
+        }
+        return $allowed;
     }
 
     /** @param array<int, int[]> $precomputed */
@@ -2916,6 +3147,21 @@ final class NavigationEngine
         }
 
         $this->buildBaseCostProfiles();
+
+        if ($this->constellationGraphRepo !== null) {
+            try {
+                $this->constellationEdges = $this->constellationGraphRepo->edgeMap();
+                $this->constellationPortals = $this->constellationGraphRepo->portalsByConstellation();
+                $this->constellationDistances = [];
+                foreach (array_keys($this->constellationPortals) as $constellationId) {
+                    $this->constellationDistances[(int) $constellationId] = $this->constellationGraphRepo->portalDistancesForConstellation((int) $constellationId);
+                }
+            } catch (\Throwable) {
+                $this->constellationEdges = [];
+                $this->constellationPortals = [];
+                $this->constellationDistances = [];
+            }
+        }
     }
 
     private function buildBaseCostProfiles(): void

@@ -4,6 +4,8 @@
 declare(strict_types=1);
 
 use Everoute\Cli\CacheWarmCommand;
+use Everoute\Cli\ConstellationDeriveCommand;
+use Everoute\Cli\ConstellationDistBuildCommand;
 use Everoute\Cli\DoctorCommand;
 use Everoute\Cli\FetchRiskCommand;
 use Everoute\Cli\ImportRiskCommand;
@@ -45,6 +47,8 @@ $application->add(new RiskIngestCommand());
 $application->add(new RiskRefreshCommand());
 $application->add(new RiskPruneCommand());
 $application->add(new CacheWarmCommand());
+$application->add(new ConstellationDeriveCommand());
+$application->add(new ConstellationDistBuildCommand());
 $application->add(new MapDeriveCommand());
 $application->add(new SeedChokepointsCommand());
 $application->add(new PrecomputeAllCommand());
