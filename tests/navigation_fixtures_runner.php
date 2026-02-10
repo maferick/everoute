@@ -278,4 +278,75 @@ assertTrueStrict(!empty($selectedRoute['fallback_used']), 'Fixture 5 selected ro
 assertSameStrict($selectedRoute['applied_avoid_strictness'] ?? '', 'soft', 'Fixture 5 selected route should downgrade to soft strictness.');
 assertTrueStrict(isset($selectedRoute['penalties_bonuses']['npc_bonus']), 'Fixture 5 selected route should include cost component telemetry.');
 
+
+
+// Fixture 6/7: jump NPC fallback detour budgets.
+$connectionNpc = new Connection('sqlite::memory:', '', '');
+$pdoNpc = $connectionNpc->pdo();
+$pdoNpc->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, security_raw REAL, security_nav REAL, region_id INTEGER, constellation_id INTEGER, is_wormhole INTEGER, is_normal_universe INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
+$pdoNpc->exec('CREATE TABLE stargates (from_system_id INTEGER, to_system_id INTEGER, is_regional_gate INTEGER)');
+$pdoNpc->exec('CREATE TABLE system_risk (system_id INTEGER, ship_kills_1h INTEGER, pod_kills_1h INTEGER, npc_kills_1h INTEGER, updated_at TEXT, risk_updated_at TEXT, kills_last_1h INTEGER, kills_last_24h INTEGER, pod_kills_last_1h INTEGER, pod_kills_last_24h INTEGER, last_updated_at TEXT)');
+$pdoNpc->exec('CREATE TABLE jump_neighbors (system_id INTEGER, range_ly INTEGER, neighbor_count INTEGER, neighbor_ids_blob BLOB, encoding_version INTEGER, updated_at TEXT)');
+
+$systemsNpc = [
+    [21, 'A-Start', 0.2, 0.2, 0.2, 1, 1, 0, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [22, 'B-End', 0.2, 0.2, 0.2, 1, 1, 0, 1, 0, 0, 1.0, 6 * $metersPerLy, 0.0, 0.0],
+    [23, 'C-NPC', 0.2, 0.2, 0.2, 1, 1, 0, 1, 1, 1, 1.0, 3 * $metersPerLy, 1 * $metersPerLy, 0.0],
+];
+$stmtNpc = $pdoNpc->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+foreach ($systemsNpc as $system) {
+    $stmtNpc->execute($system);
+    $pdoNpc->prepare('INSERT INTO system_risk VALUES (?, 0, 0, 0, ?, ?, 0, 0, 0, 0, ?)')->execute([$system[0], gmdate('c'), gmdate('c'), gmdate('c')]);
+}
+
+$neighborsNpc = [21 => [22, 23], 22 => [21, 23], 23 => [21, 22]];
+$neighborStmtNpc = $pdoNpc->prepare('INSERT INTO jump_neighbors VALUES (?, ?, ?, ?, 1, ?)');
+foreach ($neighborsNpc as $systemId => $neighborIds) {
+    for ($rangeLy = 1; $rangeLy <= 10; $rangeLy++) {
+        $neighborStmtNpc->execute([$systemId, $rangeLy, count($neighborIds), JumpNeighborCodec::encodeV1($neighborIds), gmdate('c')]);
+    }
+}
+
+$engineNpc = new NavigationEngine(
+    new SystemRepository($connectionNpc),
+    new StargateRepository($connectionNpc),
+    new JumpNeighborRepository($connectionNpc, $logger),
+    new RiskRepository($connectionNpc),
+    new JumpRangeCalculator(__DIR__ . '/../config/ships.php', __DIR__ . '/../config/jump_ranges.php'),
+    new JumpFatigueModel(),
+    new ShipRules(),
+    new SystemLookup(new SystemRepository($connectionNpc)),
+    $logger
+);
+$engineNpc->refresh();
+
+$fixture6Speed = $engineNpc->compute([
+    'from' => 'A-Start',
+    'to' => 'B-End',
+    'mode' => 'capital',
+    'jump_ship_type' => 'carrier',
+    'jump_skill_level' => 5,
+    'prefer_npc' => true,
+    'safety_vs_speed' => 20,
+    'debug' => true,
+]);
+assertSameStrict($fixture6Speed['jump_route']['total_gates'] ?? -1, 0, 'Fixture 6 should remain direct jump path.');
+assertSameStrict(count((array) ($fixture6Speed['jump_route']['segments'] ?? [])), 1, 'Fixture 6 speed-leaning should not allow +1 jump detour.');
+assertTrueStrict(empty($fixture6Speed['jump_route']['npc_fallback_used']), 'Fixture 6 speed-leaning should not use NPC fallback detour.');
+assertSameStrict($fixture6Speed['debug']['jump_origin']['npc_fallback']['reason'] ?? '', 'budget_disallows_extra_jumps', 'Fixture 6 should expose detour budget rejection reason.');
+
+$fixture7Safety = $engineNpc->compute([
+    'from' => 'A-Start',
+    'to' => 'B-End',
+    'mode' => 'capital',
+    'jump_ship_type' => 'carrier',
+    'jump_skill_level' => 5,
+    'prefer_npc' => true,
+    'safety_vs_speed' => 80,
+    'debug' => true,
+]);
+assertSameStrict(count((array) ($fixture7Safety['jump_route']['segments'] ?? [])), 2, 'Fixture 7 safety-leaning should allow +1 jump detour.');
+assertTrueStrict(!empty($fixture7Safety['jump_route']['npc_fallback_used']), 'Fixture 7 should mark NPC fallback detour usage.');
+assertSameStrict($fixture7Safety['debug']['jump_origin']['npc_fallback']['reason'] ?? '', 'low_npc_coverage', 'Fixture 7 should expose fallback trigger reason.');
+assertSameStrict((bool) ($fixture7Safety['debug']['jump_origin']['npc_fallback']['accepted'] ?? false), true, 'Fixture 7 should expose accepted detour metadata.');
 echo "Navigation fixtures runner passed.\n";
