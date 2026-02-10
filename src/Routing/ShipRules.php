@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Everoute\Routing;
 
+if (!class_exists(SecurityNav::class)) {
+    require_once __DIR__ . '/SecurityNav.php';
+}
+
 final class ShipRules
 {
     public const CARRIER = 'carrier';
@@ -13,7 +17,6 @@ final class ShipRules
     public const TITAN = 'titan';
     public const JUMP_FREIGHTER = 'jump_freighter';
 
-    private const HIGHSEC_THRESHOLD = 0.5;
 
     /** @return string[] */
     public function supportedShips(): array
@@ -56,8 +59,7 @@ final class ShipRules
     public function isSystemAllowed(string $shipType, array $system, bool $isMidpoint): bool
     {
         $shipType = $this->normalizeShipType($shipType);
-        $security = (float) ($system['security'] ?? 0.0);
-        $isHighsec = $security >= self::HIGHSEC_THRESHOLD;
+        $isHighsec = SecurityNav::isHighsec($system);
 
         if (!$this->isSupported($shipType)) {
             return true;

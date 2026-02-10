@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace Everoute\Routing;
 
+if (!class_exists(SecurityNav::class)) {
+    require_once __DIR__ . '/SecurityNav.php';
+}
+
 final class MovementRules
 {
-    public const HIGH_SEC_MIN = 0.5;
-    private const LOW_SEC_MIN = 0.1;
     /** @var array<string, string> */
     private array $spaceTypeCache = [];
 
@@ -58,15 +60,7 @@ final class MovementRules
             return $this->rememberSpaceType($cacheKey, 'wh');
         }
 
-        $security = (float) ($system['security'] ?? 0.0);
-        if ($security >= self::HIGH_SEC_MIN) {
-            return $this->rememberSpaceType($cacheKey, 'highsec');
-        }
-        if ($security >= self::LOW_SEC_MIN) {
-            return $this->rememberSpaceType($cacheKey, 'lowsec');
-        }
-
-        return $this->rememberSpaceType($cacheKey, 'nullsec');
+        return $this->rememberSpaceType($cacheKey, SecurityNav::spaceType($system));
     }
 
     private function rememberSpaceType(string $cacheKey, string $spaceType): string

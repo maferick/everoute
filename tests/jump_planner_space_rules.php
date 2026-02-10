@@ -18,12 +18,14 @@ if (file_exists($autoload)) {
 } else {
     require_once __DIR__ . '/../src/DB/Connection.php';
     require_once __DIR__ . '/../src/Config/Env.php';
+    require_once __DIR__ . '/../src/Risk/RiskScorer.php';
     require_once __DIR__ . '/../src/Routing/AStar.php';
     require_once __DIR__ . '/../src/Routing/JumpFatigueModel.php';
     require_once __DIR__ . '/../src/Routing/JumpMath.php';
     require_once __DIR__ . '/../src/Routing/JumpNeighborGraphBuilder.php';
     require_once __DIR__ . '/../src/Routing/JumpPlanner.php';
     require_once __DIR__ . '/../src/Routing/JumpRangeCalculator.php';
+    require_once __DIR__ . '/../src/Routing/JumpShipType.php';
     require_once __DIR__ . '/../src/Routing/MovementRules.php';
     require_once __DIR__ . '/../src/Routing/WeightCalculator.php';
     require_once __DIR__ . '/../src/Security/Logger.php';
@@ -43,9 +45,9 @@ function buildPlannerAndSystems(array $systemsData): array
 {
     $connection = new Connection('sqlite::memory:', '', '');
     $pdo = $connection->pdo();
-    $pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, security_raw REAL, security_nav REAL, region_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
+    $pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, security_raw REAL, security_nav REAL, region_id INTEGER, constellation_id INTEGER DEFAULT 1, is_wormhole INTEGER DEFAULT 0, is_normal_universe INTEGER DEFAULT 1, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
 
-    $stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $stmt = $pdo->prepare('INSERT INTO systems (id, name, security, security_raw, security_nav, region_id, has_npc_station, npc_station_count, system_size_au, x, y, z) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     foreach ($systemsData as $row) {
         $stmt->execute($row);
     }
@@ -107,17 +109,13 @@ foreach ($plan['segments'] ?? [] as $segment) {
 
 [$planner, $systems] = buildPlannerAndSystems([
     [1, 'Start', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [2, 'MidHigh', 0.6, 0.6, 0.6, 1, 0, 0, 1.0, 6.5 * $metersPerLy, 0.0, 0.0],
-    [3, 'MidLow', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 6.8 * $metersPerLy, 0.0, 0.0],
-    [4, 'End', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 13.6 * $metersPerLy, 0.0, 0.0],
+    [2, 'MidNavLow', 0.6, 0.4, 0.4, 1, 0, 0, 1.0, 6.5 * $metersPerLy, 0.0, 0.0],
+    [4, 'End', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 13.0 * $metersPerLy, 0.0, 0.0],
 ]);
 
 $plan = $planner->plan(1, 4, $systems, [], $carrierOptions, [], []);
 if (empty($plan['feasible'])) {
-    throw new RuntimeException('Expected carrier jump chain to be feasible.');
-}
-if (in_array('MidHigh', $plan['midpoints'] ?? [], true)) {
-    throw new RuntimeException('Carrier plan should not include high-sec midpoint systems.');
+    throw new RuntimeException('Expected carrier jump chain to be feasible when midpoint is low-sec by security_nav.');
 }
 
 [$planner, $systems] = buildPlannerAndSystems([
@@ -136,7 +134,7 @@ if (in_array('HighEnd', $plan['midpoints'] ?? [], true)) {
 
 [$planner, $systems] = buildPlannerAndSystems([
     [1, 'Start', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [2, 'MidHigh', 0.6, 0.6, 0.6, 1, 0, 0, 1.0, 7 * $metersPerLy, 0.0, 0.0],
+    [2, 'MidNavHigh', 0.49, 0.51, 0.5, 1, 0, 0, 1.0, 7 * $metersPerLy, 0.0, 0.0],
     [3, 'End', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 14 * $metersPerLy, 0.0, 0.0],
 ]);
 

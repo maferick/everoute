@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Everoute\Routing;
 
+if (!class_exists(SecurityNav::class)) {
+    require_once __DIR__ . '/SecurityNav.php';
+}
+
 use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
 use Everoute\Risk\RiskScorer;
@@ -1525,13 +1529,13 @@ final class NavigationEngine
         if (!$this->shipRules->isSystemAllowed($shipType, $system, $isMidpoint)) {
             return false;
         }
-        $security = (float) ($system['security'] ?? 0.0);
+        $security = SecurityNav::value($system);
         if ($isMidpoint) {
             if ($this->shouldFilterAvoidedSpace($options)) {
-                if (!empty($options['avoid_nullsec']) && $security < 0.1) {
+                if (!empty($options['avoid_nullsec']) && $security < SecurityNav::LOW_SEC_MIN) {
                     return false;
                 }
-                if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
+                if (!empty($options['avoid_lowsec']) && $security >= SecurityNav::LOW_SEC_MIN && $security < SecurityNav::HIGH_SEC_MIN) {
                     return false;
                 }
             }
@@ -1655,7 +1659,7 @@ final class NavigationEngine
         $total = 0.0;
         $count = 0;
         foreach ($systems as $system) {
-            $security = (float) ($system['security'] ?? 0.0);
+            $security = SecurityNav::value($system);
             $total += $this->securityPenalty($security);
             $count++;
         }
@@ -1757,14 +1761,7 @@ final class NavigationEngine
     {
         $types = [];
         foreach ($systems as $system) {
-            $security = (float) ($system['security'] ?? 0.0);
-            if ($security >= 0.5) {
-                $types['highsec'] = true;
-            } elseif ($security >= 0.1) {
-                $types['lowsec'] = true;
-            } else {
-                $types['nullsec'] = true;
-            }
+            $types[SecurityNav::spaceType($system)] = true;
         }
         $ordered = ['highsec', 'lowsec', 'nullsec'];
         $result = [];
@@ -2064,20 +2061,19 @@ final class NavigationEngine
         }
 
         if (!$this->shipRules->isSystemAllowed($shipType, $system, $isMidpoint)) {
-            $security = (float) ($system['security'] ?? 0.0);
-            if ($security >= 0.5) {
+            if (SecurityNav::isHighsec($system)) {
                 return 'highsec';
             }
             return 'ship_rules';
         }
 
-        $security = (float) ($system['security'] ?? 0.0);
+        $security = SecurityNav::value($system);
         if ($isMidpoint) {
             if ($this->shouldFilterAvoidedSpace($options)) {
-                if (!empty($options['avoid_nullsec']) && $security < 0.1) {
+                if (!empty($options['avoid_nullsec']) && $security < SecurityNav::LOW_SEC_MIN) {
                     return 'avoid_nullsec';
                 }
-                if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
+                if (!empty($options['avoid_lowsec']) && $security >= SecurityNav::LOW_SEC_MIN && $security < SecurityNav::HIGH_SEC_MIN) {
                     return 'avoid_lowsec';
                 }
             }
@@ -2106,7 +2102,7 @@ final class NavigationEngine
                 $blocked[$id] = true;
                 continue;
             }
-            $security = (float) ($system['security'] ?? 0.0);
+            $security = SecurityNav::value($system);
             $avoidLowsec = $applyAvoidFilters ? $avoidFlags['avoid_lowsec'] : false;
             $avoidNullsec = $applyAvoidFilters ? $avoidFlags['avoid_nullsec'] : false;
             if ($this->isInAllowedCore($security, $avoidLowsec, $avoidNullsec)) {
@@ -2190,9 +2186,9 @@ final class NavigationEngine
 
     private function isInAllowedCore(float $security, bool $avoidLowsec, bool $avoidNullsec): bool
     {
-        $isHighsec = $security >= 0.5;
-        $isLowsec = $security >= 0.1 && $security < 0.5;
-        $isNullsec = $security < 0.1;
+        $isHighsec = $security >= SecurityNav::HIGH_SEC_MIN;
+        $isLowsec = $security >= SecurityNav::LOW_SEC_MIN && $security < SecurityNav::HIGH_SEC_MIN;
+        $isNullsec = $security < SecurityNav::LOW_SEC_MIN;
 
         if ($avoidLowsec && $avoidNullsec) {
             return $isHighsec;
@@ -2336,10 +2332,7 @@ final class NavigationEngine
 
     private function systemSecurityForNav(array $system, bool $useNav): float
     {
-        if ($useNav && array_key_exists('security_nav', $system)) {
-            return (float) $system['security_nav'];
-        }
-        return (float) ($system['security'] ?? 0.0);
+        return SecurityNav::value($system);
     }
 
     private function isSystemAllowedForJumpChain(string $shipType, array $system, bool $isMidpoint, array $options): bool
@@ -2352,7 +2345,7 @@ final class NavigationEngine
         $security = $this->systemSecurityForNav($system, $useNavSecurity);
 
         if ($useNavSecurity) {
-            if ($security >= 0.5) {
+            if ($security >= SecurityNav::HIGH_SEC_MIN) {
                 return false;
             }
         } else {
@@ -2363,10 +2356,10 @@ final class NavigationEngine
 
         if ($isMidpoint) {
             if ($this->shouldFilterAvoidedSpace($options)) {
-                if (!empty($options['avoid_nullsec']) && $security < 0.1) {
+                if (!empty($options['avoid_nullsec']) && $security < SecurityNav::LOW_SEC_MIN) {
                     return false;
                 }
-                if (!empty($options['avoid_lowsec']) && $security >= 0.1 && $security < 0.5) {
+                if (!empty($options['avoid_lowsec']) && $security >= SecurityNav::LOW_SEC_MIN && $security < SecurityNav::HIGH_SEC_MIN) {
                     return false;
                 }
             }
@@ -2745,10 +2738,10 @@ final class NavigationEngine
         $lowsecCount = 0;
         $nullsecCount = 0;
         foreach ($systems as $system) {
-            $security = (float) ($system['security'] ?? 0.0);
-            if ($security >= 0.1 && $security < 0.5) {
+            $security = SecurityNav::value($system);
+            if ($security >= SecurityNav::LOW_SEC_MIN && $security < SecurityNav::HIGH_SEC_MIN) {
                 $lowsecCount++;
-            } elseif ($security < 0.1) {
+            } elseif ($security < SecurityNav::LOW_SEC_MIN) {
                 $nullsecCount++;
             }
         }
@@ -2873,9 +2866,7 @@ final class NavigationEngine
     {
         $npcCount = (int) ($system['npc_station_count'] ?? 0);
         $hasNpcStation = !empty($system['has_npc_station']) || $npcCount > 0;
-        $security = (float) ($system['security'] ?? 0.0);
-
-        return $hasNpcStation || $security >= 0.5;
+        return $hasNpcStation || SecurityNav::isHighsec($system);
     }
 
     private function buildJumpWaitDetails(array $jumpSegments, array $options): array
@@ -3294,7 +3285,7 @@ final class NavigationEngine
     {
         $this->baseCostProfiles = [];
         foreach ($this->systems as $id => $system) {
-            $security = (float) ($system['security'] ?? 0.0);
+            $security = SecurityNav::value($system);
             $npcCount = (int) ($system['npc_station_count'] ?? 0);
             $hasNpcStation = !empty($system['has_npc_station']) || $npcCount > 0;
             $this->baseCostProfiles[(int) $id] = [
@@ -3310,10 +3301,10 @@ final class NavigationEngine
 
     private function securityClass(float $security): string
     {
-        if ($security < 0.1) {
+        if ($security < SecurityNav::LOW_SEC_MIN) {
             return 'null';
         }
-        if ($security < 0.5) {
+        if ($security < SecurityNav::HIGH_SEC_MIN) {
             return 'low';
         }
         return 'high';
