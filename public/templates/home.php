@@ -215,11 +215,12 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                             <input type="range" name="safety_vs_speed" min="0" max="100" value="<?= htmlspecialchars((string) ($_POST['safety_vs_speed'] ?? 50), ENT_QUOTES) ?>" data-range>
                             <span class="range-value" data-range-value><?= htmlspecialchars((string) ($_POST['safety_vs_speed'] ?? 50), ENT_QUOTES) ?>%</span>
                         </div>
+                        <small class="field-help">Speed side (0–50): no extra jump for NPC preference. Safety side (51–100): may accept +1 jump for NPC preference.</small>
                     </label>
                     <div class="toggle-row">
                         <label class="toggle"><input type="checkbox" name="avoid_lowsec" <?= !empty($_POST['avoid_lowsec']) ? 'checked' : '' ?>> Avoid lowsec</label>
                         <label class="toggle"><input type="checkbox" name="avoid_nullsec" <?= !empty($_POST['avoid_nullsec']) ? 'checked' : '' ?>> Avoid nullsec</label>
-                        <label class="toggle"><input type="checkbox" name="prefer_npc_stations" <?= !empty($_POST['prefer_npc_stations']) ? 'checked' : '' ?>> Prefer NPC stations</label>
+                        <label class="toggle"><input type="checkbox" name="prefer_npc_stations" <?= !empty($_POST['prefer_npc_stations']) ? 'checked' : '' ?>> Prefer NPC stations (policy follows slider)</label>
                         <label class="toggle"><input type="checkbox" name="debug" <?= !empty($_POST['debug']) ? 'checked' : '' ?>> Debug</label>
                     </div>
                     <label>
