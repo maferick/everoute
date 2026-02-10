@@ -40,6 +40,18 @@ final class JumpRangeCalculator
         return round($effective, 2);
     }
 
+    public function fuelPerLyFactor(string $shipType): ?float
+    {
+        $shipType = JumpShipType::normalizeJumpShipType($shipType);
+        $ship = $this->shipsConfig['ships'][$shipType] ?? null;
+        if (!is_array($ship) || !array_key_exists('fuel_per_ly_factor', $ship)) {
+            return null;
+        }
+
+        $factor = (float) $ship['fuel_per_ly_factor'];
+        return $factor >= 0.0 ? $factor : null;
+    }
+
     /** @return float[] */
     public function rangeBuckets(): array
     {

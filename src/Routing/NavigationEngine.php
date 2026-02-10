@@ -87,6 +87,7 @@ final class NavigationEngine
         }
 
         $shipType = $this->resolveShipType($options);
+        $options = $this->withResolvedFuelOptions($options, $shipType);
         $jumpSkillLevel = (int) ($options['jump_skill_level'] ?? 0);
         $effectiveRange = $this->jumpRangeCalculator->effectiveRange($shipType, $jumpSkillLevel);
         $rangeBucketFloor = $effectiveRange !== null ? (int) floor($effectiveRange) : null;
@@ -148,6 +149,8 @@ final class NavigationEngine
             'effective_range_ly' => $effectiveRange,
             'scoring' => $weights,
             'weights_used' => $weights,
+            'fuel_per_ly_factor' => (float) ($options['fuel_per_ly_factor'] ?? 0.0),
+            'jump_fuel_weight' => (float) ($options['jump_fuel_weight'] ?? 0.0),
         ];
 
         if ($debugEnabled) {
@@ -177,6 +180,8 @@ final class NavigationEngine
                 'extra_gate_penalty' => $selection['extra_gate_penalty'] ?? [],
                 'scoring' => $weights,
                 'weights_used' => $weights,
+                'fuel_per_ly_factor' => (float) ($options['fuel_per_ly_factor'] ?? 0.0),
+                'jump_fuel_weight' => (float) ($options['jump_fuel_weight'] ?? 0.0),
                 'route_dominance_flags' => [
                     'gate' => [
                         'selected_as_best' => $best === 'gate',
@@ -215,6 +220,40 @@ final class NavigationEngine
         }
 
         return '';
+    }
+
+    private function withResolvedFuelOptions(array $options, string $shipType): array
+    {
+        $inputFactor = (array_key_exists('fuel_per_ly_factor', $options) && is_numeric($options['fuel_per_ly_factor']))
+            ? (float) $options['fuel_per_ly_factor']
+            : null;
+        $profileFactor = $shipType !== '' ? $this->jumpRangeCalculator->fuelPerLyFactor($shipType) : null;
+
+        $factor = $inputFactor ?? $profileFactor ?? 0.0;
+        $options['fuel_per_ly_factor'] = max(0.0, $factor);
+
+        if (array_key_exists('jump_fuel_weight', $options)) {
+            $options['jump_fuel_weight'] = max(0.0, (float) $options['jump_fuel_weight']);
+        } else {
+            $options['jump_fuel_weight'] = $this->defaultJumpFuelWeight($options);
+        }
+
+        return $options;
+    }
+
+    private function defaultJumpFuelWeight(array $options): float
+    {
+        $mode = (string) ($options['mode'] ?? 'subcap');
+
+        return $mode === 'capital' ? 1.0 : 0.6;
+    }
+
+    private function jumpFuelEdgeCost(float $distanceLy, array $options): float
+    {
+        $factor = max(0.0, (float) ($options['fuel_per_ly_factor'] ?? 0.0));
+        $weight = max(0.0, (float) ($options['jump_fuel_weight'] ?? $this->defaultJumpFuelWeight($options)));
+
+        return $distanceLy * $factor * $weight;
     }
 
     private function computeGateRoute(int $startId, int $endId, string $shipType, array $options): array
@@ -362,6 +401,7 @@ final class NavigationEngine
         $summary['illegal_systems_filtered'] = $policy['filtered'];
         $summary['preference'] = $preference;
         $summary['penalty'] = $this->routeSecurityPenalty($summary['systems'] ?? []);
+        $summary['total_fuel'] = $this->routeFuelTotal($summary, $options);
         $summary['avoid_flags'] = $this->buildAvoidFlags($options);
         $summary['exception_corridor'] = $policy['exception'];
         return $summary;
@@ -479,6 +519,7 @@ final class NavigationEngine
             return $distance
                 + $fatigue
                 + $cooldown
+                + $this->jumpFuelEdgeCost($distance, $options)
                 + ($riskScore * $this->riskWeightCache)
                 + $this->npcStationStepBonus($profile, $options)
                 + $this->avoidPenalty($profile, $options);
@@ -561,6 +602,7 @@ final class NavigationEngine
         $summary = $this->summarizeRoute($segments, $distance);
         $summary['nodes_explored'] = $nodesExplored;
         $summary['illegal_systems_filtered'] = $filtered;
+        $summary['total_fuel'] = $this->routeFuelTotal($summary, $options);
         $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($segments), $options);
         $summary += $this->buildJumpWaitDetails($segments, $options);
         return $summary;
@@ -888,6 +930,7 @@ final class NavigationEngine
                     return $distance
                         + $fatigue
                         + $cooldown
+                        + $this->jumpFuelEdgeCost($distance, $options)
                         + ((float) $profile['risk_penalty'] * $this->riskWeightCache)
                         + $this->npcStationStepBonus($profile, $options)
                         + $this->avoidPenalty($profile, $options);
@@ -925,6 +968,7 @@ final class NavigationEngine
         $summary['nodes_explored'] = (int) ($result['nodes_explored'] ?? 0);
         $summary['illegal_systems_filtered'] = $filtered;
         $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($segments), $options);
+        $summary['total_fuel'] = $this->routeFuelTotal($summary, $options);
 
         $hybridTimeCost = $this->routeTimeCost($summary);
         $gateTimeCost = !empty($gateBaseline['feasible']) ? $this->routeTimeCost($gateBaseline) : INF;
@@ -980,6 +1024,22 @@ final class NavigationEngine
                 'total_jump_ly' => 0.0,
                 'segments' => [],
                 'systems' => [$this->systemSummary($startId)],
+                'nodes_explored' => 0,
+                'illegal_systems_filtered' => 0,
+            ];
+        }
+        if (!$this->shipRules->isJumpCapable($options)) {
+            return [
+                'feasible' => false,
+                'reason' => 'Hybrid route unavailable for subcapital ships.',
+                'nodes_explored' => 0,
+                'illegal_systems_filtered' => 0,
+            ];
+        }
+        if ($rangeBucket === null) {
+            return [
+                'feasible' => false,
+                'reason' => 'Jump range unavailable for ship.',
                 'nodes_explored' => 0,
                 'illegal_systems_filtered' => 0,
             ];
@@ -1103,6 +1163,7 @@ final class NavigationEngine
                         $riskScore = $profile['risk_penalty'];
                         return $distance
                             + $cooldown
+                            + $this->jumpFuelEdgeCost($distance, $options)
                             + ($riskScore * $this->riskWeightCache)
                             + $this->npcStationStepBonus($profile, $options)
                             + $this->avoidPenalty($profile, $options);
@@ -1151,6 +1212,7 @@ final class NavigationEngine
                 $summary['nodes_explored'] = $nodesExplored;
                 $summary['illegal_systems_filtered'] = 0;
                 $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($jumpSegments), $options);
+                $summary['total_fuel'] = $this->routeFuelTotal($summary, $options);
                 $summary += $waitDetails;
                 $summary['jump_travel_minutes'] = $jumpTravelMinutes;
                 $summary['cooldown_cap_penalty_minutes'] = $cooldownPenalty;
@@ -1406,6 +1468,7 @@ final class NavigationEngine
         $summary['illegal_systems_filtered'] = $filtered;
         $summary['preference'] = $preference;
         $summary['penalty'] = $this->routeSecurityPenalty($summary['systems'] ?? []);
+        $summary['total_fuel'] = $this->routeFuelTotal($summary, $options);
         $summary['avoid_flags'] = $this->buildAvoidFlags($options);
         $summary['exception_corridor'] = [
             'start' => ['required' => false, 'hops' => 0],
@@ -1465,6 +1528,7 @@ final class NavigationEngine
         $summary['illegal_systems_filtered'] = $filtered;
         $summary['preference'] = $preference;
         $summary['penalty'] = $this->routeSecurityPenalty($summary['systems'] ?? []);
+        $summary['total_fuel'] = $this->routeFuelTotal($summary, $options);
         $summary['avoid_flags'] = $this->buildAvoidFlags($options);
         $summary['exception_corridor'] = ['start' => ['required' => false, 'hops' => 0], 'destination' => ['required' => false, 'hops' => 0]];
         $summary['hierarchy'] = $hierarchy;
@@ -2043,6 +2107,7 @@ final class NavigationEngine
                     return $distance
                         + $fatigue
                         + $cooldown
+                        + $this->jumpFuelEdgeCost($distance, $options)
                         + ($riskScore * $this->riskWeightCache)
                         + $this->avoidPenalty($profile, $options);
                 },
@@ -2931,6 +2996,14 @@ final class NavigationEngine
         return true;
     }
 
+    private function routeFuelTotal(array $summary, array $options): float
+    {
+        $jumpLy = max(0.0, (float) ($summary['total_jump_ly'] ?? 0.0));
+        $factor = max(0.0, (float) ($options['fuel_per_ly_factor'] ?? 0.0));
+
+        return round($jumpLy * $factor, 2);
+    }
+
     private function summarizeRoute(array $segments, float $distance): array
     {
         $systems = [];
@@ -2941,17 +3014,26 @@ final class NavigationEngine
             }
         }
         $totalJumpLy = 0.0;
+        $totalGateLy = 0.0;
         $gateHops = 0;
+        $jumpCount = 0;
         foreach ($segments as $segment) {
-            $toId = $segment['to_id'];
+            $fromId = (int) ($segment['from_id'] ?? 0);
+            $toId = (int) ($segment['to_id'] ?? 0);
             $system = $this->systems[$toId] ?? null;
             if ($system) {
                 $systems[] = $this->systemSummary($toId);
             }
-            if (($segment['type'] ?? 'gate') === 'jump') {
+            $segmentType = (string) ($segment['type'] ?? 'gate');
+            if ($segmentType === 'jump') {
                 $totalJumpLy += (float) ($segment['distance_ly'] ?? 0.0);
-            } else {
-                $gateHops++;
+                $jumpCount++;
+                continue;
+            }
+
+            $gateHops++;
+            if (isset($this->systems[$fromId], $this->systems[$toId])) {
+                $totalGateLy += JumpMath::distanceLy($this->systems[$fromId], $this->systems[$toId]);
             }
         }
         $lowsecCount = 0;
@@ -2965,12 +3047,19 @@ final class NavigationEngine
             }
         }
         $npcMetrics = $this->routeNpcMetrics($systems);
+        $totalLy = $totalJumpLy + $totalGateLy;
+
         return [
             'feasible' => true,
             'legacy_total_cost' => round($distance, 2),
             'total_cost' => round($distance, 2),
             'total_gates' => $gateHops,
+            'gate_count' => $gateHops,
+            'jump_count' => $jumpCount,
             'total_jump_ly' => round($totalJumpLy, 2),
+            'total_gate_ly' => round($totalGateLy, 2),
+            'total_ly' => round($totalLy, 2),
+            'total_fuel' => 0.0,
             'segments' => $segments,
             'systems' => $systems,
             'lowsec_count' => $lowsecCount,
