@@ -45,7 +45,7 @@ final class SdeImporter
                 $pdo,
                 'systems',
                 'systems_stage',
-                ['id', 'name', 'security', 'security_raw', 'security_nav', 'sec_class', 'near_constellation_boundary', 'near_region_boundary', 'legal_mask', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at']
+                ['id', 'name', 'security', 'security_true', 'security_display', 'security_raw', 'security_nav', 'sec_class', 'near_constellation_boundary', 'near_region_boundary', 'legal_mask', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at']
             );
             $this->insertFromStage(
                 $pdo,
@@ -78,9 +78,11 @@ final class SdeImporter
         $pdo->exec('CREATE TABLE systems_stage (
             id BIGINT PRIMARY KEY,
             name VARCHAR(128) NOT NULL,
-            security DECIMAL(4,2) NOT NULL,
-            security_raw DECIMAL(6,4) NOT NULL,
-            security_nav DECIMAL(4,2) NOT NULL,
+            security DECIMAL(2,1) NOT NULL,
+            security_true DOUBLE NOT NULL,
+            security_display DECIMAL(2,1) NOT NULL,
+            security_raw DOUBLE NOT NULL,
+            security_nav DECIMAL(2,1) NOT NULL,
             sec_class VARCHAR(16) NOT NULL DEFAULT \'null\',
             near_constellation_boundary TINYINT(1) NOT NULL DEFAULT 0,
             near_region_boundary TINYINT(1) NOT NULL DEFAULT 0,
@@ -125,9 +127,11 @@ final class SdeImporter
         $pdo->exec('CREATE TABLE IF NOT EXISTS systems (
             id BIGINT PRIMARY KEY,
             name VARCHAR(128) NOT NULL UNIQUE,
-            security DECIMAL(4,2) NOT NULL,
-            security_raw DECIMAL(6,4) NOT NULL,
-            security_nav DECIMAL(4,2) NOT NULL,
+            security DECIMAL(2,1) NOT NULL,
+            security_true DOUBLE NOT NULL,
+            security_display DECIMAL(2,1) NOT NULL,
+            security_raw DOUBLE NOT NULL,
+            security_nav DECIMAL(2,1) NOT NULL,
             sec_class VARCHAR(16) NOT NULL DEFAULT \'null\',
             near_constellation_boundary TINYINT(1) NOT NULL DEFAULT 0,
             near_region_boundary TINYINT(1) NOT NULL DEFAULT 0,
@@ -195,9 +199,16 @@ final class SdeImporter
         $this->ensureStargateIndex($pdo, 'idx_region_boundary', 'is_region_boundary');
         $this->ensureSystemColumn($pdo, 'has_npc_station', 'TINYINT(1) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'npc_station_count', 'INT NOT NULL DEFAULT 0');
-        $this->ensureSystemColumn($pdo, 'security_raw', 'DECIMAL(6,4) NOT NULL DEFAULT 0');
-        $this->ensureSystemColumn($pdo, 'security_nav', 'DECIMAL(4,2) NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'security_true', 'DOUBLE NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'security_display', 'DECIMAL(2,1) NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'security_raw', 'DOUBLE NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'security_nav', 'DECIMAL(2,1) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'sec_class', 'VARCHAR(16) NOT NULL DEFAULT \'null\'');
+        $this->ensureSystemColumnType($pdo, 'security_true', 'DOUBLE NOT NULL DEFAULT 0');
+        $this->ensureSystemColumnType($pdo, 'security_display', 'DECIMAL(2,1) NOT NULL DEFAULT 0');
+        $this->ensureSystemColumnType($pdo, 'security_raw', 'DOUBLE NOT NULL DEFAULT 0');
+        $this->ensureSystemColumnType($pdo, 'security_nav', 'DECIMAL(2,1) NOT NULL DEFAULT 0');
+        $this->ensureSystemColumnType($pdo, 'security', 'DECIMAL(2,1) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'near_constellation_boundary', 'TINYINT(1) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'near_region_boundary', 'TINYINT(1) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'legal_mask', 'BIGINT UNSIGNED NOT NULL DEFAULT 0');
@@ -268,6 +279,15 @@ final class SdeImporter
         }
     }
 
+    private function ensureSystemColumnType(PDO $pdo, string $column, string $definition): void
+    {
+        if (!$this->tableHasColumn($pdo, 'systems', $column)) {
+            return;
+        }
+
+        $pdo->exec(sprintf('ALTER TABLE systems MODIFY COLUMN %s %s', $column, $definition));
+    }
+
     private function loadSystems(PDO $pdo, string $path, string $now, ?callable $progress): void
     {
         $this->report($progress, '<info>Importing systems...</info>');
@@ -285,7 +305,7 @@ final class SdeImporter
                 $this->insertBatch(
                     $pdo,
                     'systems_stage',
-                    ['id', 'name', 'security', 'security_raw', 'security_nav', 'sec_class', 'near_constellation_boundary', 'near_region_boundary', 'legal_mask', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
+                    ['id', 'name', 'security', 'security_true', 'security_display', 'security_raw', 'security_nav', 'sec_class', 'near_constellation_boundary', 'near_region_boundary', 'legal_mask', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
                     $batch
                 );
                 $batch = [];
@@ -297,7 +317,7 @@ final class SdeImporter
             $this->insertBatch(
                 $pdo,
                 'systems_stage',
-                ['id', 'name', 'security', 'security_raw', 'security_nav', 'sec_class', 'near_constellation_boundary', 'near_region_boundary', 'legal_mask', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
+                ['id', 'name', 'security', 'security_true', 'security_display', 'security_raw', 'security_nav', 'sec_class', 'near_constellation_boundary', 'near_region_boundary', 'legal_mask', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
                 $batch
             );
         }
@@ -592,6 +612,8 @@ final class SdeImporter
             'id' => $id,
             'name' => $name,
             'security' => $securityDisplay,
+            'security_true' => $securityRaw,
+            'security_display' => $securityDisplay,
             'security_raw' => $securityRaw,
             'security_nav' => $securityDisplay,
             'sec_class' => $secClass,

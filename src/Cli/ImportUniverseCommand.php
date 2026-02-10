@@ -62,7 +62,7 @@ final class ImportUniverseCommand extends Command
     private function importSystems(PDO $pdo, array $systems): void
     {
         $now = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-        $stmt = $pdo->prepare('INSERT INTO systems (id, name, security, security_raw, security_nav, sec_class, region_id, constellation_id, x, y, z, system_size_au, updated_at) VALUES (:id, :name, :security, :security_raw, :security_nav, :sec_class, :region_id, :constellation_id, :x, :y, :z, :system_size_au, :updated_at) ON DUPLICATE KEY UPDATE name=VALUES(name), security=VALUES(security), security_raw=VALUES(security_raw), security_nav=VALUES(security_nav), sec_class=VALUES(sec_class), region_id=VALUES(region_id), constellation_id=VALUES(constellation_id), x=VALUES(x), y=VALUES(y), z=VALUES(z), system_size_au=VALUES(system_size_au), updated_at=VALUES(updated_at)');
+        $stmt = $pdo->prepare('INSERT INTO systems (id, name, security, security_true, security_display, security_raw, security_nav, sec_class, region_id, constellation_id, x, y, z, system_size_au, updated_at) VALUES (:id, :name, :security, :security_true, :security_display, :security_raw, :security_nav, :sec_class, :region_id, :constellation_id, :x, :y, :z, :system_size_au, :updated_at) ON DUPLICATE KEY UPDATE name=VALUES(name), security=VALUES(security), security_true=VALUES(security_true), security_display=VALUES(security_display), security_raw=VALUES(security_raw), security_nav=VALUES(security_nav), sec_class=VALUES(sec_class), region_id=VALUES(region_id), constellation_id=VALUES(constellation_id), x=VALUES(x), y=VALUES(y), z=VALUES(z), system_size_au=VALUES(system_size_au), updated_at=VALUES(updated_at)');
         foreach ($systems as $system) {
             $securityRaw = SecurityStatus::normalizeSecurityRaw((float) ($system['security_raw'] ?? $system['security'] ?? 0.0));
             $securityDisplay = SecurityStatus::secDisplayFromRaw($securityRaw);
@@ -71,6 +71,8 @@ final class ImportUniverseCommand extends Command
                 'id' => $system['id'],
                 'name' => $system['name'],
                 'security' => $securityDisplay,
+                'security_true' => $securityRaw,
+                'security_display' => $securityDisplay,
                 'security_raw' => $securityRaw,
                 'security_nav' => $securityDisplay,
                 'sec_class' => $secClass,

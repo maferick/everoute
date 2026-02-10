@@ -138,25 +138,27 @@ final class MapDeriveCommand extends Command
 
     private function recomputeSecurityFields(PDO $pdo): int
     {
-        $rows = $pdo->query('SELECT id, security_raw, security_nav, security, sec_class FROM systems');
+        $rows = $pdo->query('SELECT id, security_true, security_display, security_raw, security_nav, security, sec_class FROM systems');
         if ($rows === false) {
             return 0;
         }
 
-        $update = $pdo->prepare('UPDATE systems SET security = :security, security_nav = :security_nav, sec_class = :sec_class WHERE id = :id');
+        $update = $pdo->prepare('UPDATE systems SET security = :security, security_display = :security_display, security_nav = :security_nav, sec_class = :sec_class WHERE id = :id');
         $changed = 0;
 
         foreach ($rows->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $securityTrue = SecurityStatus::normalizeSecurityRaw((float) ($row['security_raw'] ?? $row['security'] ?? 0.0));
+            $securityTrue = SecurityStatus::normalizeSecurityRaw((float) ($row['security_true'] ?? $row['security_raw'] ?? $row['security'] ?? 0.0));
             $securityDisplay = SecurityStatus::secDisplayFromRaw($securityTrue);
             $secClass = SecurityStatus::secBandFromDisplay($securityDisplay);
 
             $currentSecurity = isset($row['security']) ? (float) $row['security'] : null;
+            $currentDisplay = isset($row['security_display']) ? (float) $row['security_display'] : null;
             $currentNav = isset($row['security_nav']) ? (float) $row['security_nav'] : null;
             $currentClass = (string) ($row['sec_class'] ?? '');
 
             if (
                 $currentSecurity !== null && abs($currentSecurity - $securityDisplay) < 0.0001
+                && $currentDisplay !== null && abs($currentDisplay - $securityDisplay) < 0.0001
                 && $currentNav !== null && abs($currentNav - $securityDisplay) < 0.0001
                 && $currentClass === $secClass
             ) {
@@ -166,6 +168,7 @@ final class MapDeriveCommand extends Command
             $update->execute([
                 'id' => (int) $row['id'],
                 'security' => $securityDisplay,
+                'security_display' => $securityDisplay,
                 'security_nav' => $securityDisplay,
                 'sec_class' => $secClass,
             ]);

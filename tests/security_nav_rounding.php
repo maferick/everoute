@@ -19,65 +19,56 @@ if (file_exists($autoload)) {
 
 $cases = [
     [0.49, 0.5, 'high'],
+    [0.449136, 0.4, 'low'],
     [0.44, 0.4, 'low'],
     [0.05, 0.1, 'low'],
     [0.04, 0.0, 'null'],
     [-0.01, 0.0, 'null'],
     [-0.06, -0.1, 'null'],
-    [0.45, 0.5, 'high'],
 ];
 
 foreach ($cases as [$raw, $expectedDisplay, $expectedClass]) {
     $actual = SecurityStatus::navFromRaw((float) $raw);
     if (abs($actual - $expectedDisplay) > 0.0001) {
-        throw new RuntimeException(sprintf('Expected %.2f to round to %.1f, got %.2f.', $raw, $expectedDisplay, $actual));
+        throw new RuntimeException(sprintf('Expected %.6f to round to %.1f, got %.2f.', $raw, $expectedDisplay, $actual));
     }
 
     $band = SecurityStatus::secBandFromDisplay($actual);
     if ($band !== $expectedClass) {
-        throw new RuntimeException(sprintf('Expected %.2f to classify as %s, got %s.', $raw, $expectedClass, $band));
+        throw new RuntimeException(sprintf('Expected %.6f to classify as %s, got %s.', $raw, $expectedClass, $band));
     }
 
-    $routing = SecurityNav::getSecurityForRouting(['security_raw' => $raw]);
+    $routing = SecurityNav::getSecurityForRouting(['security_true' => $raw]);
     if (abs($routing - $expectedDisplay) > 0.0001) {
-        throw new RuntimeException(sprintf('Expected routing security %.2f to round to %.1f, got %.2f.', $raw, $expectedDisplay, $routing));
+        throw new RuntimeException(sprintf('Expected routing security %.6f to round to %.1f, got %.2f.', $raw, $expectedDisplay, $routing));
     }
 }
 
-$fromRaw = ['security' => 0.6, 'security_raw' => 0.49];
-if (abs(SecurityNav::value($fromRaw) - 0.6) > 0.0001) {
-    throw new RuntimeException('Expected security display to prefer explicit security column when present.');
+$comparison = SecurityNav::debugComparison(['name' => 'Liparer', 'security_true' => 0.449136, 'security_display' => 0.4, 'sec_class' => 'low']);
+if (abs((float) $comparison['sec_routing'] - 0.4) > 0.0001) {
+    throw new RuntimeException('Expected Liparer sec_routing to be 0.4.');
 }
 
-$fromSecurity = ['security' => 0.49];
-if (abs(SecurityNav::value($fromSecurity) - 0.5) > 0.0001) {
-    throw new RuntimeException('Expected fallback to rounded security display when security_nav/security_raw are absent.');
+if (SecurityNav::isIllegalHighsecForCapital(['security_true' => 0.449136, 'security_display' => 0.4, 'sec_class' => 'low']) !== false) {
+    throw new RuntimeException('Expected capital highsec check to allow Liparer as lowsec.');
 }
 
-$comparison = SecurityNav::debugComparison(['name' => 'Liparer', 'security_raw' => 0.45, 'security_nav' => 0.5]);
-if (abs((float) $comparison['sec_routing'] - 0.5) > 0.0001) {
-    throw new RuntimeException('Expected Liparer sec_routing to be 0.5.');
-}
-
-if (SecurityNav::isIllegalHighsecForCapital(['security_raw' => 0.45]) !== true) {
-    throw new RuntimeException('Expected capital highsec check to reject sec 0.45 due to display rounding.');
-}
-
-if (SecurityNav::isIllegalHighsecForCapital(['security_raw' => 0.44]) !== false) {
-    throw new RuntimeException('Expected capital highsec check to allow sec 0.44.');
+if (SecurityNav::isIllegalHighsecForCapital(['security_true' => 0.49, 'security_display' => 0.5, 'sec_class' => 'high']) !== true) {
+    throw new RuntimeException('Expected capital highsec check to reject sec 0.49 displayed as 0.5.');
 }
 
 $movementRules = new MovementRules();
-if ($movementRules->getSystemSpaceType(['security' => 0.6, 'security_raw' => 0.49, 'security_nav' => 0.5]) !== 'highsec') {
-    throw new RuntimeException('Expected MovementRules to classify using display security.');
+if ($movementRules->getSystemSpaceType(['security_true' => 0.449136, 'security_display' => 0.4, 'sec_class' => 'low']) !== 'lowsec') {
+    throw new RuntimeException('Expected MovementRules to classify Liparer as lowsec.');
 }
 
 $shipRules = new ShipRules();
-if ($shipRules->isSystemAllowed(ShipRules::CARRIER, ['security_raw' => 0.45], true) !== false) {
-    throw new RuntimeException('Expected ShipRules legality checks to block sec 0.45 for capitals with display rounding.');
+if ($shipRules->isSystemAllowed(ShipRules::CARRIER, ['security_true' => 0.449136, 'security_display' => 0.4, 'sec_class' => 'low'], true) !== true) {
+    throw new RuntimeException('Expected ShipRules legality checks to allow sec 0.4 lowsec for capitals.');
 }
-if ($shipRules->isSystemAllowed(ShipRules::CARRIER, ['security_raw' => 0.44], true) !== true) {
-    throw new RuntimeException('Expected ShipRules legality checks to allow sec 0.44 for capitals.');
+
+if ($shipRules->isSystemAllowed(ShipRules::CARRIER, ['security_true' => 0.49, 'security_display' => 0.5, 'sec_class' => 'high'], true) !== false) {
+    throw new RuntimeException('Expected ShipRules legality checks to block displayed highsec for capitals.');
 }
 
 echo "Security routing rounding test passed.\n";
