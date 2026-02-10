@@ -84,6 +84,7 @@ $router = new Router();
 $router->add('GET', '/api/v1/health', [$api, 'health']);
 $router->add('POST', '/api/v1/route', [$api, 'route']);
 $router->add('GET', '/api/v1/systems', [$api, 'systemSearch']);
+$router->add('GET', '/api/v1/jump-distance-diagnostics', [$api, 'jumpDistanceDiagnostics']);
 $router->add('GET', '/api/v1/system-risk', [$api, 'systemRisk']);
 $router->add('GET', '/api/v1/heatmap', [$api, 'heatmap']);
 
@@ -123,6 +124,8 @@ try {
             'avoid_strictness' => $_POST['avoid_strictness'] ?? '',
             'avoid_specific_systems' => $_POST['avoid_specific_systems'] ?? '',
             'prefer_npc_stations' => $preferNpcStations,
+            'allow_gate_reposition' => !array_key_exists('allow_gate_reposition', $_POST) || !empty($_POST['allow_gate_reposition']),
+            'hybrid_gate_budget_max' => max(2, min(12, (int) ($_POST['hybrid_gate_budget_max'] ?? 8))),
             'debug' => !empty($_POST['debug']),
         ];
         $apiRequest = new Request('POST', '/api/v1/route', [], $payload, [], $request->ip, $request->requestId);

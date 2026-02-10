@@ -118,6 +118,9 @@ $options = [
     'avoid_nullsec' => false,
     'avoid_systems' => [],
     'prefer_npc' => false,
+    'allow_gate_reposition' => true,
+    'hybrid_gate_budget_max' => 2,
+    'npc_fallback_max_extra_jumps' => 0,
     'ship_modifier' => 1.0,
 ];
 
@@ -132,6 +135,9 @@ if (!empty($jumpOnly['feasible'])) {
 
 if (empty($hybrid['feasible'])) {
     throw new RuntimeException('Expected hybrid plan to be feasible.');
+}
+if (((int) ($hybrid['hybrid_launch_candidates'] ?? 0)) < 1) {
+    throw new RuntimeException('Expected hybrid launch candidate generation to produce at least one candidate for K>=2.');
 }
 
 echo "Hybrid planner integration test passed.\n";

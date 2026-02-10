@@ -16,6 +16,7 @@ if (!class_exists(\Everoute\Routing\RouteRequest::class)) {
 
 use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
+use Everoute\Routing\JumpMath;
 use Everoute\Routing\PreferenceProfile;
 use Everoute\Routing\RouteRequest;
 use Everoute\Routing\RouteService;
@@ -99,6 +100,8 @@ final class ApiController
         $avoidLowsec = $this->validator->bool($body['avoid_lowsec'] ?? null, false);
         $avoidNullsec = $this->validator->bool($body['avoid_nullsec'] ?? null, false);
         $preferNpc = $this->validator->bool($body['prefer_npc_stations'] ?? null, $isCapitalRequest);
+        $allowGateReposition = $this->validator->bool($body['allow_gate_reposition'] ?? null, true);
+        $hybridGateBudgetMax = $this->validator->int($body['hybrid_gate_budget_max'] ?? null, 2, 12, 8);
 
         $fuelPerLyFactorRaw = $body['fuel_per_ly_factor'] ?? (($body['ship_profile']['fuel_per_ly_factor'] ?? null));
         $fuelPerLyFactor = is_numeric($fuelPerLyFactorRaw) ? (float) $fuelPerLyFactorRaw : null;
@@ -126,7 +129,9 @@ final class ApiController
                 ''
             ),
             isset($body['avoid_specific_systems']) ? $this->validator->list((string) $body['avoid_specific_systems']) : [],
-            $preferNpc
+            $preferNpc,
+            $allowGateReposition,
+            $hybridGateBudgetMax
         );
 
         $result = $this->routes->computeRoutes($routeRequest);
@@ -149,6 +154,34 @@ final class ApiController
         }
 
         return new JsonResponse($result);
+    }
+
+
+    public function jumpDistanceDiagnostics(Request $request): Response
+    {
+        $pairs = [
+            ['from' => '1-SMEB', 'to' => 'Irmalin'],
+            ['from' => '1-SMEB', 'to' => 'RCI-VL'],
+            ['from' => '1-SMEB', 'to' => 'Sakht'],
+        ];
+
+        $payload = [];
+        foreach ($pairs as $pair) {
+            $from = $this->systems->findByNameOrId($pair['from']);
+            $to = $this->systems->findByNameOrId($pair['to']);
+            $key = $pair['from'] . ' -> ' . $pair['to'];
+            if ($from === null || $to === null) {
+                $payload[$key] = ['available' => false, 'distance_ly' => null];
+                continue;
+            }
+            $payload[$key] = [
+                'available' => true,
+                'distance_ly' => round(JumpMath::distanceLy($from, $to), 6),
+                'within_7_ly' => JumpMath::distanceLy($from, $to) <= 7.0,
+            ];
+        }
+
+        return new JsonResponse(['distances' => $payload]);
     }
 
     public function systemSearch(Request $request): Response

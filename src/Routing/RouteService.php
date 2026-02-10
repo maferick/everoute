@@ -75,6 +75,8 @@ final class RouteService
             $payload['avoid_strictness'] = $defaultStrictness;
         }
         $payload['prefer_npc'] = (bool) ($payload['prefer_npc'] ?? false);
+        $payload['allow_gate_reposition'] = (bool) ($payload['allow_gate_reposition'] ?? true);
+        $payload['hybrid_gate_budget_max'] = (int) ($payload['hybrid_gate_budget_max'] ?? 8);
         $payload['hybrid_launch_hops'] = (int) ($payload['hybrid_launch_hops'] ?? 6);
         $payload['hybrid_landing_hops'] = (int) ($payload['hybrid_landing_hops'] ?? 4);
         $payload['hybrid_launch_candidates_limit'] = (int) ($payload['hybrid_launch_candidates_limit'] ?? 50);

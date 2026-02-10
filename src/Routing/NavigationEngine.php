@@ -203,6 +203,10 @@ final class NavigationEngine
                         'dominance_rule_winner' => $best === 'hybrid' && !empty($selection['dominance_rule_applied']),
                     ],
                 ],
+                'hybrid_launch_candidates' => (int) ($hybridRoute['hybrid_launch_candidates'] ?? 0),
+                'hybrid_gate_budget_used' => (int) ($hybridRoute['hybrid_gate_budget_used'] ?? 0),
+                'hybrid_top_launch_candidates' => $hybridRoute['hybrid_top_launch_candidates'] ?? [],
+                'distance_checks_ly' => $this->distanceCheckMetrics(),
             ];
             if (isset($jumpRoute['debug']) && is_array($jumpRoute['debug'])) {
                 $payload['debug']['jump_origin'] = $jumpRoute['debug'];
@@ -210,6 +214,42 @@ final class NavigationEngine
         }
 
         return $payload;
+    }
+
+
+    /** @return array<string, mixed> */
+    private function distanceCheckMetrics(): array
+    {
+        $pairs = [
+            ['1-SMEB', 'Irmalin'],
+            ['1-SMEB', 'RCI-VL'],
+            ['1-SMEB', 'Sakht'],
+        ];
+        $result = [];
+        foreach ($pairs as [$fromName, $toName]) {
+            $from = null;
+            $to = null;
+            foreach ($this->systems as $system) {
+                if (($system['name'] ?? null) === $fromName) {
+                    $from = $system;
+                }
+                if (($system['name'] ?? null) === $toName) {
+                    $to = $system;
+                }
+            }
+            $key = $fromName . '->' . $toName;
+            if ($from === null || $to === null) {
+                $result[$key] = ['available' => false, 'distance_ly' => null];
+                continue;
+            }
+            $distance = JumpMath::distanceLy($from, $to);
+            $result[$key] = [
+                'available' => true,
+                'distance_ly' => round($distance, 6),
+                'within_7_ly' => $distance <= 7.0,
+            ];
+        }
+        return $result;
     }
 
     private function resolveShipType(array $options): string
@@ -558,7 +598,7 @@ final class NavigationEngine
             $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
             return $this->jumpEdgeCost($distance, $shipType, $profile, $options);
         };
-        $result = $dijkstra->shortestPath($graph['neighbors'], $startId, $endId, $costFn, null, null, 50000);
+        $result = $this->findJumpPathByDominance($graph['neighbors'], $startId, $endId, $options);
 
         if ($result['path'] === [] || ($result['path'][count($result['path']) - 1] ?? null) !== $endId) {
             if ($debugLogs) {
@@ -640,6 +680,106 @@ final class NavigationEngine
         $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($segments), $options);
         $summary += $this->buildJumpWaitDetails($segments, $options);
         return $summary;
+    }
+
+
+    /** @param array<int, array<int, array{to:int,type:string,distance_ly:float}>> $neighbors */
+    private function findJumpPathByDominance(array $neighbors, int $startId, int $endId, array $options): array
+    {
+        $queue = new \SplQueue();
+        $queue->enqueue($startId);
+
+        $state = [
+            $startId => [
+                'hops' => 0,
+                'distance' => 0.0,
+                'max_hop' => 0.0,
+                'prev' => null,
+            ],
+        ];
+
+        $nodesExplored = 0;
+        $dominanceEnabled = !array_key_exists('dominance_rule_enabled', $options) || !empty($options['dominance_rule_enabled']);
+
+        while (!$queue->isEmpty()) {
+            $node = (int) $queue->dequeue();
+            $nodesExplored++;
+            $current = $state[$node];
+
+            foreach ($neighbors[$node] ?? [] as $edge) {
+                $to = (int) ($edge['to'] ?? 0);
+                if ($to === 0) {
+                    continue;
+                }
+                $edgeDistance = (float) ($edge['distance_ly'] ?? 0.0);
+                $candidate = [
+                    'hops' => (int) $current['hops'] + 1,
+                    'distance' => (float) $current['distance'] + $edgeDistance,
+                    'max_hop' => max((float) $current['max_hop'], $edgeDistance),
+                    'prev' => $node,
+                ];
+
+                $existing = $state[$to] ?? null;
+                $better = false;
+                if ($existing === null) {
+                    $better = true;
+                } elseif ($dominanceEnabled) {
+                    if ((int) $candidate['hops'] < (int) $existing['hops']) {
+                        $better = true;
+                    } elseif ((int) $candidate['hops'] === (int) $existing['hops']) {
+                        if ((float) $candidate['distance'] < (float) $existing['distance'] - 1e-9) {
+                            $better = true;
+                        } elseif (abs((float) $candidate['distance'] - (float) $existing['distance']) <= 1e-9
+                            && (float) $candidate['max_hop'] < (float) $existing['max_hop'] - 1e-9) {
+                            $better = true;
+                        }
+                    }
+                } else {
+                    if ((float) $candidate['distance'] < (float) $existing['distance'] - 1e-9) {
+                        $better = true;
+                    }
+                }
+
+                if (!$better) {
+                    continue;
+                }
+
+                $state[$to] = $candidate;
+                $queue->enqueue($to);
+            }
+        }
+
+        if (!isset($state[$endId])) {
+            return ['path' => [], 'edges' => [], 'distance' => INF, 'nodes_explored' => $nodesExplored];
+        }
+
+        $path = [];
+        $cursor = $endId;
+        while ($cursor !== null) {
+            array_unshift($path, $cursor);
+            $cursor = $state[$cursor]['prev'];
+        }
+
+        $edges = [];
+        for ($i = 0; $i < count($path) - 1; $i++) {
+            $from = (int) $path[$i];
+            $to = (int) $path[$i + 1];
+            $distance = 0.0;
+            foreach ($neighbors[$from] ?? [] as $edge) {
+                if ((int) ($edge['to'] ?? 0) === $to) {
+                    $distance = (float) ($edge['distance_ly'] ?? 0.0);
+                    break;
+                }
+            }
+            $edges[] = ['to' => $to, 'type' => 'jump', 'distance_ly' => $distance];
+        }
+
+        return [
+            'path' => $path,
+            'edges' => $edges,
+            'distance' => (float) ($state[$endId]['distance'] ?? INF),
+            'nodes_explored' => $nodesExplored,
+        ];
     }
 
     private function npcFallbackCoverageThreshold(array $options): float
@@ -1077,7 +1217,9 @@ final class NavigationEngine
             ];
         }
 
-        $launchHopLimit = max(1, min(10, (int) ($options['hybrid_launch_hops'] ?? 6)));
+        $allowGateReposition = !array_key_exists('allow_gate_reposition', $options) || !empty($options['allow_gate_reposition']);
+        $hybridGateBudgetMax = max(2, min(12, (int) ($options['hybrid_gate_budget_max'] ?? 8)));
+        $launchHopLimit = $allowGateReposition ? $hybridGateBudgetMax : 0;
         $landingHopLimit = max(0, min(10, (int) ($options['hybrid_landing_hops'] ?? 4)));
         $launchCandidateLimit = max(1, min(200, (int) ($options['hybrid_launch_candidate_limit'] ?? 50)));
         $landingCandidateLimit = max(1, min(200, (int) ($options['hybrid_landing_candidate_limit'] ?? 25)));
@@ -1107,6 +1249,8 @@ final class NavigationEngine
                 'reason' => 'No launch candidates within gate hop limit.',
                 'nodes_explored' => 0,
                 'illegal_systems_filtered' => 0,
+                'hybrid_launch_candidates' => 0,
+                'hybrid_gate_budget_used' => $launchHopLimit,
             ];
         }
 
@@ -1295,6 +1439,17 @@ final class NavigationEngine
             'jump' => $jumpTimeCost,
             'required_min_improvement' => $minHybridSelectionImprovement,
         ];
+        $bestPlan['hybrid_launch_candidates'] = count($launchCandidates);
+        $bestPlan['hybrid_gate_budget_used'] = $launchHopLimit;
+        $topLaunch = array_slice(array_map(static function (array $candidate): array {
+            return [
+                'system_id' => (int) ($candidate['system_id'] ?? 0),
+                'system_name' => (string) ($candidate['system_name'] ?? ''),
+                'gate_hops' => (int) ($candidate['gate_hops'] ?? 0),
+                'benefit_hops' => (int) ($candidate['benefit_hops'] ?? 0),
+            ];
+        }, $launchCandidates), 0, 5);
+        $bestPlan['hybrid_top_launch_candidates'] = $topLaunch;
         $bestPlan['hybrid_explainability']['baseline_comparison'] = $bestPlan['baseline_time_costs'];
 
         if (is_finite($gateTimeCost) && ($gateTimeCost - $hybridTimeCost) < $minHybridSelectionImprovement) {
@@ -3343,6 +3498,44 @@ final class NavigationEngine
      * @param array<string, array<string, mixed>> $feasibleRoutes
      * @return array<string, array<string, mixed>>
      */
+
+    private function routeDominates(array $candidate, array $other, array $options, bool $preferJumpHopsPrimary): bool
+    {
+        $candidateJumpHops = (int) ($candidate['jump_hops'] ?? 0);
+        $otherJumpHops = (int) ($other['jump_hops'] ?? 0);
+        if ($preferJumpHopsPrimary && $candidateJumpHops !== $otherJumpHops) {
+            return $candidateJumpHops < $otherJumpHops;
+        }
+
+        $candidateActions = (int) ($candidate['total_gates'] ?? 0) + $candidateJumpHops;
+        $otherActions = (int) ($other['total_gates'] ?? 0) + (int) ($other['jump_hops'] ?? 0);
+        if ($candidateActions !== $otherActions) {
+            return $candidateActions < $otherActions;
+        }
+
+        $candidateLy = (float) ($candidate['total_jump_ly'] ?? 0.0);
+        $otherLy = (float) ($other['total_jump_ly'] ?? 0.0);
+        if (abs($candidateLy - $otherLy) > 1e-9) {
+            return $candidateLy < $otherLy;
+        }
+
+        $candidateMaxHop = (float) ($candidate['max_jump_hop_ly'] ?? 0.0);
+        $otherMaxHop = (float) ($other['max_jump_hop_ly'] ?? 0.0);
+        if (abs($candidateMaxHop - $otherMaxHop) > 1e-9) {
+            return $candidateMaxHop < $otherMaxHop;
+        }
+
+        if (!empty($options['fatigue_aware_routing'])) {
+            $candidateFatigue = (float) (($candidate['fatigue']['jump_fatigue_minutes'] ?? 0.0));
+            $otherFatigue = (float) (($other['fatigue']['jump_fatigue_minutes'] ?? 0.0));
+            if (abs($candidateFatigue - $otherFatigue) > 1e-9) {
+                return $candidateFatigue < $otherFatigue;
+            }
+        }
+
+        return (float) ($candidate['time_cost'] ?? INF) <= (float) ($other['time_cost'] ?? INF);
+    }
+
     private function normalizeRouteTotals(array $feasibleRoutes): array
     {
         $min = INF;
@@ -3398,17 +3591,23 @@ final class NavigationEngine
         }
 
         $safetyVsSpeed = max(0, min(100, (int) ($options['safety_vs_speed'] ?? 50)));
-        if ($safetyVsSpeed <= 25
-            && !empty($feasible['jump'])
-            && !empty($feasible['hybrid'])
-            && (float) ($feasible['jump']['time_cost'] ?? INF) <= ((float) ($feasible['hybrid']['time_cost'] ?? INF) * 0.95)
-        ) {
-            return [
-                'best' => 'jump',
-                'reason' => 'jump_dominates_hybrid_time_threshold',
-                'dominance_rule_applied' => true,
-                'extra_gate_penalty' => [],
-            ];
+        $profile = strtolower((string) ($options['preference_profile'] ?? 'balanced'));
+        $dominanceEnabled = !array_key_exists('dominance_rule_enabled', $options) || !empty($options['dominance_rule_enabled']);
+        if ($dominanceEnabled && ($profile === 'speed' || $profile === 'balanced' || $safetyVsSpeed <= 50)) {
+            $jumpRoute = $feasible['jump'] ?? null;
+            if (is_array($jumpRoute)) {
+                $hybridRoute = $feasible['hybrid'] ?? null;
+                $dominatesHybrid = !is_array($hybridRoute)
+                    || $this->routeDominates($jumpRoute, $hybridRoute, $options, true);
+                if ($dominatesHybrid) {
+                    return [
+                        'best' => 'jump',
+                        'reason' => 'jump_dominates_by_lexicographic_hops',
+                        'dominance_rule_applied' => true,
+                        'extra_gate_penalty' => [],
+                    ];
+                }
+            }
         }
 
         $extraGatePenalty = [
@@ -3518,7 +3717,7 @@ final class NavigationEngine
             return ['No feasible routes found.'];
         }
         $reasons = [];
-        if ($selectionReason === 'jump_dominates_hybrid_time_threshold') {
+        if (in_array($selectionReason, ['jump_dominates_hybrid_time_threshold', 'jump_dominates_by_lexicographic_hops'], true)) {
             $reasons[] = 'Selected jump due to speed-leaning dominance rule over hybrid.';
         } elseif ($selectionReason === 'normalized_total_cost_with_extra_gate_penalty') {
             $reasons[] = sprintf('Selected %s with lowest normalized total cost after extra-gate penalty.', $best);
