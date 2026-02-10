@@ -46,6 +46,7 @@ Base: `/api/v1`
 - Avoid low/null-sec settings are treated as soft penalties for jump planning unless `avoid_strictness=strict`.
 - When routes are not feasible (e.g. capital start/end in high-sec), the response includes `error` and `reason`.
 - When `APP_DEBUG=true`, jump planning responses include a `debug` object with candidate/edge counts and max segment distance.
+- Jump fatigue calculations currently use `phoebe-2018-v1`; debug payloads and route-cache keys include this version for traceability.
 
 ### Response (truncated)
 ```json
@@ -97,7 +98,8 @@ Base: `/api/v1`
             "candidate_systems_evaluated": 1200,
             "edges_built": 640,
             "max_segment_distance_ly": 6.8,
-            "chain_length": 2
+            "chain_length": 2,
+            "fatigue_model_version": "phoebe-2018-v1"
           }
         },
         "hybrid": {

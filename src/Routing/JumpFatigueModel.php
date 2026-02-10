@@ -6,6 +6,8 @@ namespace Everoute\Routing;
 
 final class JumpFatigueModel
 {
+    public const VERSION = 'phoebe-2018-v1';
+
     private const MAX_FATIGUE_MIN = 300.0;
     private const MAX_COOLDOWN_MIN = 30.0;
     private const LOOKUP_MIN_LY = 0.1;

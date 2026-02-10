@@ -232,7 +232,7 @@ final class JumpPlanner
                 'effective_jump_range_ly' => $effectiveRange,
                 'jump_cooldown_total_minutes' => null,
                 'jump_fatigue_risk_label' => 'not_applicable',
-                'debug' => $debugEnabled ? ($planResult['debug'] ?? null) : null,
+                'debug' => $debugEnabled ? (($planResult['debug'] ?? []) + ['fatigue_model_version' => JumpFatigueModel::VERSION]) : null,
             ];
         }
 
@@ -256,7 +256,7 @@ final class JumpPlanner
                 'effective_jump_range_ly' => $effectiveRange,
                 'jump_cooldown_total_minutes' => null,
                 'jump_fatigue_risk_label' => 'not_applicable',
-                'debug' => $debugEnabled ? ($planResult['debug'] ?? null) : null,
+                'debug' => $debugEnabled ? (($planResult['debug'] ?? []) + ['fatigue_model_version' => JumpFatigueModel::VERSION]) : null,
             ];
         }
 
@@ -310,7 +310,7 @@ final class JumpPlanner
             'wait_systems' => $waitSystems,
             'risk_score' => $riskScore,
             'exposure_score' => $exposureScore,
-            'debug' => $debugEnabled ? ($planResult['debug'] ?? null) : null,
+            'debug' => $debugEnabled ? (($planResult['debug'] ?? []) + ['fatigue_model_version' => JumpFatigueModel::VERSION]) : null,
         ];
     }
 
@@ -818,6 +818,7 @@ final class JumpPlanner
             'effective_range_ly' => round($rangeMeters / JumpMath::METERS_PER_LY, 2),
             'avoid_lowsec' => $avoidFlags['avoid_lowsec'],
             'avoid_nullsec' => $avoidFlags['avoid_nullsec'],
+            'fatigue_model_version' => JumpFatigueModel::VERSION,
         ];
     }
 }
