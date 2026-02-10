@@ -22,6 +22,10 @@ use Everoute\Universe\SystemRepository;
 
 final class NavigationEngine
 {
+    private const SYSTEM_LEGAL = 'LEGAL';
+    private const SYSTEM_ILLEGAL_SOFT = 'ILLEGAL_SOFT';
+    private const SYSTEM_ILLEGAL_HARD = 'ILLEGAL_HARD';
+
     /** @var array<int, array<string, mixed>> */
     private array $systems = [];
     /** @var array<int, array<string, mixed>> */
@@ -2028,6 +2032,9 @@ final class NavigationEngine
             $fromReason = $this->jumpPolicyFilterReason($shipType, $this->systems[$from], $fromIsMidpoint, $options);
             if ($fromReason !== null) {
                 $filtered++;
+                if (str_starts_with($fromReason, 'filtered_illegal_security')) {
+                    $policyReasons['filtered_illegal_security'] = ($policyReasons['filtered_illegal_security'] ?? 0) + 1;
+                }
                 $policyReasons[$fromReason] = ($policyReasons[$fromReason] ?? 0) + 1;
                 continue;
             }
@@ -2053,7 +2060,19 @@ final class NavigationEngine
                 if ($reason !== null) {
                     $filtered++;
                     $filteredForNode++;
+                    if (str_starts_with($reason, 'filtered_illegal_security')) {
+                        $policyReasons['filtered_illegal_security'] = ($policyReasons['filtered_illegal_security'] ?? 0) + 1;
+                    }
                     $policyReasons[$reason] = ($policyReasons[$reason] ?? 0) + 1;
+                    if ($debugLogs) {
+                        $this->logger->debug('Jump edge filtered for legality', [
+                            'from' => $this->systems[$from]['name'] ?? (string) $from,
+                            'to' => $this->systems[$to]['name'] ?? (string) $to,
+                            'from_sec' => SecurityNav::value($this->systems[$from]),
+                            'to_sec' => SecurityNav::value($this->systems[$to]),
+                            'reason' => $reason,
+                        ]);
+                    }
                     continue;
                 }
                 $policyCount++;
@@ -2111,23 +2130,10 @@ final class NavigationEngine
 
     private function isSystemAllowedForRoute(string $shipType, array $system, bool $isMidpoint, array $options): bool
     {
-        if (!$this->shipRules->isSystemAllowed($shipType, $system, $isMidpoint)) {
+        if ($this->jumpPolicyFilterReason($shipType, $system, $isMidpoint, $options) !== null) {
             return false;
         }
-        $security = SecurityNav::value($system);
-        if ($isMidpoint) {
-            if ($this->shouldFilterAvoidedSpace($options)) {
-                if (!empty($options['avoid_nullsec']) && $security < SecurityNav::LOW_SEC_MIN) {
-                    return false;
-                }
-                if (!empty($options['avoid_lowsec']) && $security >= SecurityNav::LOW_SEC_MIN && $security < SecurityNav::HIGH_SEC_MIN) {
-                    return false;
-                }
-            }
-            if (!empty($options['avoid_systems']) && in_array($system['name'], (array) $options['avoid_systems'], true)) {
-                return false;
-            }
-        }
+
         return true;
     }
 
@@ -2645,31 +2651,18 @@ final class NavigationEngine
             return 'pochven';
         }
 
-        if (!$this->shipRules->isSystemAllowed($shipType, $system, $isMidpoint)) {
-            if (SecurityNav::isHighsec($system)) {
-                return 'highsec';
-            }
-            return 'ship_rules';
+        $reason = $this->jumpPolicyFilterReason($shipType, $system, $isMidpoint, $options);
+        if ($reason === null) {
+            return null;
         }
 
-        $security = SecurityNav::value($system);
-        if ($isMidpoint) {
-            if ($this->shouldFilterAvoidedSpace($options)) {
-                if (!empty($options['avoid_nullsec']) && $security < SecurityNav::LOW_SEC_MIN) {
-                    return 'avoid_nullsec';
-                }
-                if (!empty($options['avoid_lowsec']) && $security >= SecurityNav::LOW_SEC_MIN && $security < SecurityNav::HIGH_SEC_MIN) {
-                    return 'avoid_lowsec';
-                }
-            }
-            if (!empty($options['avoid_systems'])
-                && in_array($system['name'], (array) $options['avoid_systems'], true)
-            ) {
-                return 'avoid_systems';
-            }
-        }
-
-        return null;
+        return match ($reason) {
+            'filtered_avoid_list' => 'avoid_systems',
+            'filtered_illegal_security_highsec_forbidden' => 'highsec',
+            'filtered_illegal_security_avoid_lowsec_strict' => 'avoid_lowsec',
+            'filtered_illegal_security_avoid_nullsec_strict' => 'avoid_nullsec',
+            default => 'ship_rules',
+        };
     }
 
     /** @return array{allowed: ?array<int, bool>, filtered: int, exception: array<string, array<string, int|bool>>, reason: ?string} */
@@ -2923,73 +2916,72 @@ final class NavigationEngine
         return SecurityNav::value($system);
     }
 
+    private function isSystemAllowedForShip(array $system, array $policy): string
+    {
+        $security = SecurityNav::value($system);
+        $strictness = strtolower((string) ($policy['strictness'] ?? 'soft'));
+        $isStrict = $strictness === 'strict';
+
+        if ($security >= SecurityNav::HIGH_SEC_MIN) {
+            return self::SYSTEM_ILLEGAL_HARD;
+        }
+
+        if ($security >= 0.0) {
+            if (!empty($policy['avoid_lowsec'])) {
+                return $isStrict ? self::SYSTEM_ILLEGAL_HARD : self::SYSTEM_ILLEGAL_SOFT;
+            }
+
+            return self::SYSTEM_LEGAL;
+        }
+
+        if (!empty($policy['avoid_nullsec'])) {
+            return $isStrict ? self::SYSTEM_ILLEGAL_HARD : self::SYSTEM_ILLEGAL_SOFT;
+        }
+
+        return self::SYSTEM_LEGAL;
+    }
+
     private function isSystemAllowedForJumpChain(string $shipType, array $system, bool $isMidpoint, array $options): bool
     {
-        if ($this->isPochvenSystem($system)) {
-            return false;
-        }
-
-        $useNavSecurity = $this->isCapitalShipType($shipType);
-        $security = $this->systemSecurityForNav($system, $useNavSecurity);
-
-        if ($useNavSecurity) {
-            if ($security >= SecurityNav::HIGH_SEC_MIN) {
-                return false;
-            }
-        } else {
-            if (!$this->shipRules->isSystemAllowed($shipType, $system, $isMidpoint)) {
-                return false;
-            }
-        }
-
-        if ($isMidpoint) {
-            if ($this->shouldFilterAvoidedSpace($options)) {
-                if (!empty($options['avoid_nullsec']) && $security < SecurityNav::LOW_SEC_MIN) {
-                    return false;
-                }
-                if (!empty($options['avoid_lowsec']) && $security >= SecurityNav::LOW_SEC_MIN && $security < SecurityNav::HIGH_SEC_MIN) {
-                    return false;
-                }
-            }
-            if (!empty($options['avoid_systems'])
-                && in_array($system['name'], (array) $options['avoid_systems'], true)
-            ) {
-                return false;
-            }
-        }
-
-        return true;
+        return $this->jumpPolicyFilterReason($shipType, $system, $isMidpoint, $options) === null;
     }
 
     private function jumpPolicyFilterReason(string $shipType, array $system, bool $isMidpoint, array $options): ?string
     {
         if ($this->isPochvenSystem($system)) {
-            return 'filtered_illegal_security';
+            return 'filtered_illegal_security_pochven';
         }
 
-        $useNavSecurity = $this->isCapitalShipType($shipType);
-        $security = $this->systemSecurityForNav($system, $useNavSecurity);
+        $useCapitalLegality = $this->isCapitalShipType($shipType) || $shipType === JumpShipType::JUMP_FREIGHTER;
 
-        if ($useNavSecurity) {
-            if ($security >= SecurityNav::HIGH_SEC_MIN) {
+        if ($useCapitalLegality) {
+            $legality = $this->isSystemAllowedForShip($system, [
+                'ship_class' => 'capital',
+                'avoid_lowsec' => !empty($options['avoid_lowsec']) && $isMidpoint,
+                'avoid_nullsec' => !empty($options['avoid_nullsec']) && $isMidpoint,
+                'strictness' => $this->shouldFilterAvoidedSpace($options) ? 'strict' : 'soft',
+            ]);
+
+            if ($legality === self::SYSTEM_ILLEGAL_HARD) {
+                $security = SecurityNav::value($system);
+                if ($security >= SecurityNav::HIGH_SEC_MIN) {
+                    return 'filtered_illegal_security_highsec_forbidden';
+                }
+                if ($security >= 0.0 && !empty($options['avoid_lowsec']) && $isMidpoint) {
+                    return 'filtered_illegal_security_avoid_lowsec_strict';
+                }
+                if ($security < 0.0 && !empty($options['avoid_nullsec']) && $isMidpoint) {
+                    return 'filtered_illegal_security_avoid_nullsec_strict';
+                }
                 return 'filtered_illegal_security';
             }
+
         } elseif (!$this->shipRules->isSystemAllowed($shipType, $system, $isMidpoint)) {
             return 'filtered_illegal_security';
         }
 
-        if ($isMidpoint) {
-            if ($this->shouldFilterAvoidedSpace($options)) {
-                if (!empty($options['avoid_nullsec']) && $security < SecurityNav::LOW_SEC_MIN) {
-                    return 'filtered_illegal_security';
-                }
-                if (!empty($options['avoid_lowsec']) && $security >= SecurityNav::LOW_SEC_MIN && $security < SecurityNav::HIGH_SEC_MIN) {
-                    return 'filtered_illegal_security';
-                }
-            }
-            if (!empty($options['avoid_systems']) && in_array($system['name'], (array) $options['avoid_systems'], true)) {
-                return 'filtered_avoid_list';
-            }
+        if ($isMidpoint && !empty($options['avoid_systems']) && in_array($system['name'], (array) $options['avoid_systems'], true)) {
+            return 'filtered_avoid_list';
         }
 
         return null;
