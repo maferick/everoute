@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS systems (
     id BIGINT PRIMARY KEY,
     name VARCHAR(128) NOT NULL UNIQUE,
     security DECIMAL(4,2) NOT NULL,
-    security_raw DECIMAL(4,2) NOT NULL,
+    security_raw DECIMAL(6,4) NOT NULL,
     security_nav DECIMAL(4,2) NOT NULL,
     sec_class VARCHAR(16) NOT NULL DEFAULT 'null',
     near_constellation_boundary TINYINT(1) NOT NULL DEFAULT 0,
