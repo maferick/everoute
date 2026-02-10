@@ -373,6 +373,41 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                                     <span>Illegal filtered: <?= htmlspecialchars((string) ($route['illegal_systems_filtered'] ?? 0), ENT_QUOTES) ?></span>
                                 </div>
 
+                                <?php
+                                $weightsUsed = $route['weights_used'] ?? ($result['weights_used'] ?? []);
+                                $penaltiesBonuses = $route['penalties_bonuses'] ?? [];
+                                $dominanceFlags = $route['dominance_flags'] ?? [];
+                                ?>
+                                <details class="route-details">
+                                    <summary>Score breakdown</summary>
+                                    <div class="route-sublist-summary">
+                                        <span>time_cost: <?= htmlspecialchars(number_format((float) ($route['time_cost'] ?? 0.0), 4), ENT_QUOTES) ?></span>
+                                        <span>risk_cost: <?= htmlspecialchars(number_format((float) ($route['risk_cost'] ?? 0.0), 4), ENT_QUOTES) ?></span>
+                                        <span>preference_cost: <?= htmlspecialchars(number_format((float) ($route['preference_cost'] ?? 0.0), 4), ENT_QUOTES) ?></span>
+                                        <span>total_cost: <?= htmlspecialchars(number_format((float) ($route['total_cost'] ?? 0.0), 4), ENT_QUOTES) ?></span>
+                                    </div>
+                                    <div class="route-sublist-summary">
+                                        <span>w_time: <?= htmlspecialchars(number_format((float) ($weightsUsed['w_time'] ?? 0.0), 4), ENT_QUOTES) ?></span>
+                                        <span>w_risk: <?= htmlspecialchars(number_format((float) ($weightsUsed['w_risk'] ?? 0.0), 4), ENT_QUOTES) ?></span>
+                                        <span>w_pref: <?= htmlspecialchars(number_format((float) ($weightsUsed['w_pref'] ?? 0.0), 4), ENT_QUOTES) ?></span>
+                                    </div>
+                                    <div class="route-sublist-summary">
+                                        <span>gate_time_minutes: <?= htmlspecialchars(number_format((float) ($route['gate_time_minutes'] ?? 0.0), 2), ENT_QUOTES) ?></span>
+                                        <span>jump_handling_minutes: <?= htmlspecialchars(number_format((float) ($route['jump_handling_minutes'] ?? 0.0), 2), ENT_QUOTES) ?></span>
+                                        <span>mandatory_wait_minutes: <?= htmlspecialchars(number_format((float) ($route['mandatory_wait_minutes'] ?? 0.0), 2), ENT_QUOTES) ?></span>
+                                    </div>
+                                    <div class="route-sublist-summary">
+                                        <span>npc_bonus: <?= htmlspecialchars(number_format((float) ($penaltiesBonuses['npc_bonus'] ?? 0.0), 4), ENT_QUOTES) ?></span>
+                                        <span>selection_penalty: <?= htmlspecialchars(number_format((float) ($penaltiesBonuses['selection_penalty'] ?? 0.0), 4), ENT_QUOTES) ?></span>
+                                        <span>extra_gate_penalty: <?= htmlspecialchars(number_format((float) ($penaltiesBonuses['extra_gate_penalty'] ?? 0.0), 4), ENT_QUOTES) ?></span>
+                                    </div>
+                                    <div class="route-sublist-summary">
+                                        <span>selected_as_best: <?= !empty($dominanceFlags['selected_as_best']) ? 'true' : 'false' ?></span>
+                                        <span>dominance_rule_applied: <?= !empty($dominanceFlags['dominance_rule_applied']) ? 'true' : 'false' ?></span>
+                                        <span>dominance_rule_winner: <?= !empty($dominanceFlags['dominance_rule_winner']) ? 'true' : 'false' ?></span>
+                                    </div>
+                                </details>
+
                                 <?php if ($sameAsGate): ?>
                                     <p class="muted">Same as Gate route — no additional hybrid hops needed.</p>
                                 <?php endif; ?>
