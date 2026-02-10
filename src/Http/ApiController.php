@@ -4,9 +4,14 @@ declare(strict_types=1);
 
 namespace Everoute\Http;
 
+if (!class_exists(\Everoute\Routing\PreferenceProfile::class)) {
+    require_once __DIR__ . '/../Routing/PreferenceProfile.php';
+}
+
 use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
 use Everoute\Routing\JumpShipType;
+use Everoute\Routing\PreferenceProfile;
 use Everoute\Routing\RouteService;
 use Everoute\Security\RateLimiter;
 use Everoute\Security\Validator;
@@ -81,6 +86,12 @@ final class ApiController
             $mode = 'capital';
         }
         $safety = $this->validator->int($body['safety_vs_speed'] ?? null, 0, 100, $mode === 'capital' ? 70 : 50);
+        $requestedProfile = $this->validator->enum(
+            strtolower((string) ($body['preference_profile'] ?? $body['profile'] ?? '')),
+            [PreferenceProfile::SPEED, PreferenceProfile::BALANCED, PreferenceProfile::SAFETY],
+            ''
+        );
+        $resolvedPreferenceProfile = PreferenceProfile::resolve($requestedProfile !== '' ? $requestedProfile : null, $safety);
         $preference = $this->validator->enum((string) ($body['preference'] ?? 'shorter'), ['shorter', 'safer', 'less_secure'], 'shorter');
         $jumpSkillLevel = $this->validator->int($body['jump_skill_level'] ?? null, 0, 5, 5);
         $avoidLowsec = $this->validator->bool($body['avoid_lowsec'] ?? null, false);
@@ -114,6 +125,7 @@ final class ApiController
             'npc_fallback_max_extra_jumps' => $npcDetourPolicy['npc_detour_max_extra_jumps'],
             'ship_modifier' => $this->shipModifier($shipClass),
             'fuel_per_ly_factor' => $fuelPerLyFactor,
+            'preference_profile' => $resolvedPreferenceProfile,
         ];
 
         $result = $this->routes->computeRoutes($options);
