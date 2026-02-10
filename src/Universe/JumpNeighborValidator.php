@@ -10,7 +10,7 @@ final class JumpNeighborValidator
 {
     private ?string $rangeColumn = null;
 
-    public function __construct(private Connection $connection)
+    public function __construct(private Connection $connection, private string $table = "jump_neighbors")
     {
     }
 
@@ -30,10 +30,11 @@ final class JumpNeighborValidator
         $placeholders = implode(', ', array_fill(0, count($ranges), '?'));
         $stmt = $pdo->prepare(sprintf(
             'SELECT system_id, %s AS range_ly, neighbor_count
-             FROM jump_neighbors
+             FROM `%s`
              WHERE %s IN (%s)
              ORDER BY system_id, %s',
             $rangeColumn,
+            $this->table,
             $rangeColumn,
             $placeholders,
             $rangeColumn
@@ -91,9 +92,10 @@ final class JumpNeighborValidator
         $placeholders = implode(', ', array_fill(0, count($ranges), '?'));
         $stmt = $pdo->prepare(sprintf(
             'SELECT system_id, COUNT(*) AS row_count
-             FROM jump_neighbors
+             FROM `%s`
              WHERE %s IN (%s)
              GROUP BY system_id',
+            $this->table,
             $rangeColumn,
             $placeholders
         ));
@@ -162,7 +164,7 @@ final class JumpNeighborValidator
 
         $driver = $pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
         if ($driver === 'sqlite') {
-            $stmt = $pdo->query("PRAGMA table_info('jump_neighbors')");
+            $stmt = $pdo->query(sprintf("PRAGMA table_info('%s')", $this->table));
             $columns = $stmt ? $stmt->fetchAll(\PDO::FETCH_COLUMN, 1) : [];
         } else {
             $stmt = $pdo->prepare(
@@ -172,7 +174,7 @@ final class JumpNeighborValidator
                    AND (column_name = :range_ly OR column_name = :range)'
             );
             $stmt->execute([
-                'table' => 'jump_neighbors',
+                'table' => $this->table,
                 'range_ly' => 'range_ly',
                 'range' => 'range',
             ]);

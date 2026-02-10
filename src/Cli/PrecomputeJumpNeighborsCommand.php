@@ -10,6 +10,7 @@ use Everoute\Routing\JumpRangeCalculator;
 use Everoute\Universe\JumpNeighborCodec;
 use Everoute\Universe\PrecomputeCheckpointRepository;
 use Everoute\Universe\JumpNeighborValidator;
+use Everoute\Universe\StaticTableResolver;
 use Everoute\Universe\SystemRepository;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -31,7 +32,8 @@ final class PrecomputeJumpNeighborsCommand extends Command
             ->addOption('ranges', null, InputOption::VALUE_REQUIRED, 'Comma-separated LY ranges to compute (default config)')
             ->addOption('resume', null, InputOption::VALUE_NONE, 'Resume from last checkpoint')
             ->addOption('sleep', null, InputOption::VALUE_REQUIRED, 'Sleep seconds between systems', '0')
-            ->addOption('include-wormholes', null, InputOption::VALUE_NONE, 'Include wormhole and non-normal-universe systems');
+            ->addOption('include-wormholes', null, InputOption::VALUE_NONE, 'Include wormhole and non-normal-universe systems')
+            ->addOption('build-id', null, InputOption::VALUE_REQUIRED, 'Optional build id for shadow-table writes');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -41,20 +43,23 @@ final class PrecomputeJumpNeighborsCommand extends Command
         $sleepSeconds = (float) $input->getOption('sleep');
         $rangeOption = (string) $input->getOption('ranges');
         $includeWormholes = (bool) $input->getOption('include-wormholes');
+        $buildId = trim((string) $input->getOption('build-id'));
 
         $connection = $this->connection();
+        $resolver = new StaticTableResolver($connection);
+        $table = $resolver->writeTable(StaticTableResolver::JUMP_NEIGHBORS, $buildId !== '' ? $buildId : null);
         $pdo = $connection->pdo();
-        if (!$this->tableExists($pdo, 'jump_neighbors')) {
+        if (!$this->tableExists($pdo, $table)) {
             $output->writeln('<error>Missing jump_neighbors table. Run sql/schema.sql to initialize the database schema.</error>');
             return Command::FAILURE;
         }
-        $rangeColumn = $this->ensureRangeColumn($pdo, $output);
+        $rangeColumn = $this->ensureRangeColumn($pdo, $table, $output);
         if ($rangeColumn === null) {
             $output->writeln('<error>Missing range column on jump_neighbors. Expected range_ly or range.</error>');
             return Command::FAILURE;
         }
-        $this->ensureEncodingVersionColumn($pdo, $output);
-        $rangeBucketColumn = $this->resolveRangeBucketColumn($pdo);
+        $this->ensureEncodingVersionColumn($pdo, $table, $output);
+        $rangeBucketColumn = $this->resolveRangeBucketColumn($pdo, $table);
         $checkpointRepo = new PrecomputeCheckpointRepository($connection);
         $rangeCalculator = new JumpRangeCalculator(__DIR__ . '/../../config/ships.php', __DIR__ . '/../../config/jump_ranges.php');
         $ranges = $this->parseRanges($rangeOption, $rangeCalculator->rangeBuckets());
@@ -78,11 +83,11 @@ final class PrecomputeJumpNeighborsCommand extends Command
         $totalStoredBytes = 0;
 
         $maxRange = max($ranges);
-        $this->purgeUnsupportedRanges($output, $pdo, $maxRange, $rangeColumn);
+        $this->purgeUnsupportedRanges($output, $pdo, $table, $maxRange, $rangeColumn);
 
-        $jobKey = 'jump_neighbors:cumulative:' . implode('-', $ranges);
+        $jobKey = 'jump_neighbors:cumulative:' . implode('-', $ranges) . ($buildId !== '' ? ':' . $buildId : '');
         if (!$resume) {
-            $this->clearRanges($output, $pdo, $rangeColumn, $ranges);
+            $this->clearRanges($output, $pdo, $table, $rangeColumn, $ranges);
             $checkpointRepo->clear($jobKey);
         }
 
@@ -149,7 +154,8 @@ final class PrecomputeJumpNeighborsCommand extends Command
                 $insertValues = array_merge($insertValues, [':neighbor_count', ':payload', ':encoding_version', 'NOW()']);
 
                 $stmt = $pdo->prepare(sprintf(
-                    'INSERT INTO jump_neighbors (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s',
+                    'INSERT INTO `%s` (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s',
+                    $table,
                     implode(', ', $insertColumns),
                     implode(', ', $insertValues),
                     implode(', ', $updateClauses)
@@ -186,7 +192,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
 
         $this->reportProgress($output, $processed, $totalSystems, $startedAt, sprintf('<=%d', $maxRange));
 
-        $validator = new JumpNeighborValidator($connection);
+        $validator = new JumpNeighborValidator($connection, $table);
         $completeness = $validator->validateCompleteness($ranges, $systemIds);
         if ($completeness['missing_rows_found'] > 0) {
             $output->writeln(sprintf(
@@ -261,9 +267,9 @@ final class PrecomputeJumpNeighborsCommand extends Command
         return array_slice($neighbors, 0, $cap, true);
     }
 
-    private function purgeUnsupportedRanges(OutputInterface $output, \PDO $pdo, int $maxRange, string $rangeColumn): void
+    private function purgeUnsupportedRanges(OutputInterface $output, \PDO $pdo, string $table, int $maxRange, string $rangeColumn): void
     {
-        $stmt = $pdo->prepare(sprintf('DELETE FROM jump_neighbors WHERE %s > :max_range', $rangeColumn));
+        $stmt = $pdo->prepare(sprintf('DELETE FROM `%s` WHERE %s > :max_range', $table, $rangeColumn));
         $stmt->execute(['max_range' => $maxRange]);
         $removed = $stmt->rowCount();
         if ($removed > 0) {
@@ -276,7 +282,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
     }
 
     /** @param int[] $ranges */
-    private function clearRanges(OutputInterface $output, \PDO $pdo, string $rangeColumn, array $ranges): void
+    private function clearRanges(OutputInterface $output, \PDO $pdo, string $table, string $rangeColumn, array $ranges): void
     {
         if ($ranges === []) {
             return;
@@ -286,7 +292,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
             '<comment>Clearing jump_neighbors for ranges: %s...</comment>',
             implode(', ', $ranges)
         ));
-        $stmt = $pdo->prepare(sprintf('DELETE FROM jump_neighbors WHERE %s IN (%s)', $rangeColumn, $placeholders));
+        $stmt = $pdo->prepare(sprintf('DELETE FROM `%s` WHERE %s IN (%s)', $table, $rangeColumn, $placeholders));
         $stmt->execute(array_values($ranges));
     }
 
@@ -367,7 +373,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
         return (bool) $stmt->fetchColumn();
     }
 
-    private function resolveRangeColumn(\PDO $pdo): ?string
+    private function resolveRangeColumn(\PDO $pdo, string $table): ?string
     {
         $stmt = $pdo->prepare(
             'SELECT column_name FROM information_schema.columns
@@ -376,7 +382,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
                AND (column_name = :range_ly OR column_name = :range)'
         );
         $stmt->execute([
-            'table' => 'jump_neighbors',
+            'table' => $table,
             'range_ly' => 'range_ly',
             'range' => 'range',
         ]);
@@ -390,7 +396,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
         return null;
     }
 
-    private function resolveRangeBucketColumn(\PDO $pdo): ?string
+    private function resolveRangeBucketColumn(\PDO $pdo, string $table): ?string
     {
         $stmt = $pdo->prepare(
             'SELECT column_name FROM information_schema.columns
@@ -399,40 +405,40 @@ final class PrecomputeJumpNeighborsCommand extends Command
                AND column_name = :range_bucket'
         );
         $stmt->execute([
-            'table' => 'jump_neighbors',
+            'table' => $table,
             'range_bucket' => 'range_bucket',
         ]);
         $column = $stmt->fetchColumn();
         return is_string($column) ? $column : null;
     }
 
-    private function ensureRangeColumn(\PDO $pdo, OutputInterface $output): ?string
+    private function ensureRangeColumn(\PDO $pdo, string $table, OutputInterface $output): ?string
     {
-        $rangeColumn = $this->resolveRangeColumn($pdo);
+        $rangeColumn = $this->resolveRangeColumn($pdo, $table);
         if ($rangeColumn !== null) {
             return $rangeColumn;
         }
 
         $output->writeln('<comment>Missing range column on jump_neighbors. Attempting to add range_ly...</comment>');
 
-        if (!$this->columnExists($pdo, 'jump_neighbors', 'range_ly')) {
-            $pdo->exec('ALTER TABLE jump_neighbors ADD COLUMN range_ly SMALLINT UNSIGNED NOT NULL DEFAULT 1 AFTER system_id');
+        if (!$this->columnExists($pdo, $table, 'range_ly')) {
+            $pdo->exec(sprintf('ALTER TABLE `%s` ADD COLUMN range_ly SMALLINT UNSIGNED NOT NULL DEFAULT 1 AFTER system_id', $table));
         }
 
-        $this->ensurePrimaryKey($pdo, ['system_id', 'range_ly']);
-        $this->ensureIndex($pdo, 'jump_neighbors', 'idx_jump_neighbors_range', 'range_ly');
+        $this->ensurePrimaryKey($pdo, $table, ['system_id', 'range_ly']);
+        $this->ensureIndex($pdo, $table, 'idx_jump_neighbors_range', 'range_ly');
 
-        return $this->resolveRangeColumn($pdo);
+        return $this->resolveRangeColumn($pdo, $table);
     }
 
-    private function ensureEncodingVersionColumn(\PDO $pdo, OutputInterface $output): void
+    private function ensureEncodingVersionColumn(\PDO $pdo, string $table, OutputInterface $output): void
     {
-        if ($this->columnExists($pdo, 'jump_neighbors', 'encoding_version')) {
+        if ($this->columnExists($pdo, $table, 'encoding_version')) {
             return;
         }
 
         $output->writeln('<comment>Missing encoding_version column on jump_neighbors. Attempting to add it...</comment>');
-        $pdo->exec('ALTER TABLE jump_neighbors ADD COLUMN encoding_version TINYINT NOT NULL DEFAULT 1 AFTER neighbor_ids_blob');
+        $pdo->exec(sprintf('ALTER TABLE `%s` ADD COLUMN encoding_version TINYINT NOT NULL DEFAULT 1 AFTER neighbor_ids_blob', $table));
     }
 
     private function columnExists(\PDO $pdo, string $table, string $column): bool
@@ -448,7 +454,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
     }
 
     /** @param string[] $columns */
-    private function ensurePrimaryKey(\PDO $pdo, array $columns): void
+    private function ensurePrimaryKey(\PDO $pdo, string $table, array $columns): void
     {
         $stmt = $pdo->prepare(
             'SELECT column_name FROM information_schema.key_column_usage
@@ -457,7 +463,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
                AND constraint_name = :constraint
              ORDER BY ordinal_position'
         );
-        $stmt->execute(['table' => 'jump_neighbors', 'constraint' => 'PRIMARY']);
+        $stmt->execute(['table' => $table, 'constraint' => 'PRIMARY']);
         $existing = $stmt->fetchAll(\PDO::FETCH_COLUMN);
         if ($existing === $columns) {
             return;
@@ -465,13 +471,14 @@ final class PrecomputeJumpNeighborsCommand extends Command
 
         if ($existing !== []) {
             if (in_array('system_id', $existing, true)) {
-                $this->ensureIndex($pdo, 'jump_neighbors', 'idx_jump_neighbors_system', 'system_id');
+                $this->ensureIndex($pdo, $table, 'idx_jump_neighbors_system', 'system_id');
             }
-            $pdo->exec('ALTER TABLE jump_neighbors DROP PRIMARY KEY');
+            $pdo->exec(sprintf('ALTER TABLE `%s` DROP PRIMARY KEY', $table));
         }
 
         $pdo->exec(sprintf(
-            'ALTER TABLE jump_neighbors ADD PRIMARY KEY (%s)',
+            'ALTER TABLE `%s` ADD PRIMARY KEY (%s)',
+            $table,
             implode(', ', $columns)
         ));
     }
@@ -490,7 +497,7 @@ final class PrecomputeJumpNeighborsCommand extends Command
         }
 
         $pdo->exec(sprintf(
-            'ALTER TABLE %s ADD INDEX %s (%s)',
+            'ALTER TABLE `%s` ADD INDEX `%s` (`%s`)',
             $table,
             $index,
             $column

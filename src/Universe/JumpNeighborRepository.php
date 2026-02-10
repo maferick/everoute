@@ -11,18 +11,22 @@ use Everoute\Security\Logger;
 final class JumpNeighborRepository
 {
     private bool $debugMode;
+    private StaticTableResolver $tableResolver;
 
     public function __construct(private Connection $connection, private Logger $logger)
     {
         $this->debugMode = Env::bool('APP_DEBUG', false);
+        $this->tableResolver = new StaticTableResolver($connection);
     }
 
     /** @return array<int, int[]>|null */
     public function loadRangeBucket(int $rangeBucket, int $expectedSystems): ?array
     {
         $pdo = $this->connection->pdo();
+        $table = $this->tableResolver->readTable(StaticTableResolver::JUMP_NEIGHBORS);
         $stmt = $pdo->prepare(sprintf(
-            'SELECT system_id, range_ly, neighbor_count, neighbor_ids_blob, encoding_version FROM jump_neighbors WHERE range_ly = :range_ly'
+            'SELECT system_id, range_ly, neighbor_count, neighbor_ids_blob, encoding_version FROM `%s` WHERE range_ly = :range_ly',
+            $table
         ));
         $stmt->execute(['range_ly' => $rangeBucket]);
         $neighbors = [];
@@ -48,8 +52,10 @@ final class JumpNeighborRepository
     public function loadSystemNeighbors(int $systemId, int $rangeBucket): ?array
     {
         $pdo = $this->connection->pdo();
+        $table = $this->tableResolver->readTable(StaticTableResolver::JUMP_NEIGHBORS);
         $stmt = $pdo->prepare(sprintf(
-            'SELECT system_id, range_ly, neighbor_count, neighbor_ids_blob, encoding_version FROM jump_neighbors WHERE system_id = :system_id AND range_ly = :range_ly'
+            'SELECT system_id, range_ly, neighbor_count, neighbor_ids_blob, encoding_version FROM `%s` WHERE system_id = :system_id AND range_ly = :range_ly',
+            $table
         ));
         $stmt->execute(['system_id' => $systemId, 'range_ly' => $rangeBucket]);
         $row = $stmt->fetch(\PDO::FETCH_ASSOC);
