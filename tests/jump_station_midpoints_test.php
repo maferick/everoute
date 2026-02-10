@@ -146,6 +146,12 @@ if (in_array('Mid-No-Station', $strictMidpoints, true)) {
 if (($strictRoute['midpoints_with_station'] ?? '') !== '2/2') {
     throw new RuntimeException('Strict station diagnostics should report all midpoints with stations.');
 }
+if (($strictRoute['station_constraint_mode'] ?? '') !== 'strict') {
+    throw new RuntimeException('Strict station diagnostics should expose station_constraint_mode=strict.');
+}
+if (($strictRoute['midpoints_total'] ?? null) !== 2 || ($strictRoute['midpoints_with_station_count'] ?? null) !== 2) {
+    throw new RuntimeException('Strict station diagnostics should expose midpoint totals and counts.');
+}
 
 $soft = $base;
 $soft['require_station_midpoints'] = true;
@@ -161,6 +167,12 @@ if (($softRoute['midpoints_with_station'] ?? '') !== '2/2') {
 }
 if (!empty($softRoute['station_midpoint_violations'])) {
     throw new RuntimeException('Soft station run should not report violations when all-station route exists.');
+}
+if (($softRoute['station_constraint_mode'] ?? '') !== 'soft') {
+    throw new RuntimeException('Soft station diagnostics should expose station_constraint_mode=soft.');
+}
+if (!isset($softRoute['station_filter_stats']) || !is_array($softRoute['station_filter_stats'])) {
+    throw new RuntimeException('Soft station diagnostics should include station_filter_stats.');
 }
 
 echo "Jump station midpoint constraints passed.\n";

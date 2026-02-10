@@ -441,6 +441,11 @@ button.loading .button-spinner {
     color: #f87171;
 }
 
+.station-violation {
+    color: #f87171;
+    font-weight: 600;
+}
+
 .empty-state {
     text-align: center;
     padding: 32px 12px;

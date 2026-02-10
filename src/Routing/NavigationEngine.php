@@ -22,6 +22,7 @@ use Everoute\Universe\SystemRepository;
 
 final class NavigationEngine
 {
+    private const STATION_MIDPOINT_SOFT_PENALTY = 10000.0;
     private const SYSTEM_LEGAL = 'LEGAL';
     private const SYSTEM_ILLEGAL_SOFT = 'ILLEGAL_SOFT';
     private const SYSTEM_ILLEGAL_HARD = 'ILLEGAL_HARD';
@@ -65,6 +66,8 @@ final class NavigationEngine
     private array $lastJumpNeighborDebug = [];
     /** @var array<string, mixed> */
     private array $lastJumpConnectivityDebug = [];
+    /** @var array{filtered_missing_station_count:int,penalized_missing_station_count:int} */
+    private array $lastStationFilterStats = ['filtered_missing_station_count' => 0, 'penalized_missing_station_count' => 0];
     private RiskScorer $riskScorer;
 
     public function __construct(
@@ -677,6 +680,10 @@ final class NavigationEngine
 
         $boundedCandidates = $this->boundedJumpCandidateSet($startId, $endId, $rangeBucket);
         $graph = $this->buildJumpGraph($neighbors, $startId, $endId, $shipType, $options, $debugLogs, $effectiveRange, $boundedCandidates);
+        $this->lastStationFilterStats = [
+            'filtered_missing_station_count' => (int) (($graph['station_filter_stats']['filtered_missing_station_count'] ?? 0)),
+            'penalized_missing_station_count' => (int) (($graph['station_filter_stats']['penalized_missing_station_count'] ?? 0)),
+        ];
         $this->lastJumpNeighborDebug = $graph['debug'] ?? [];
         $dotlanEdgeChecks = $this->dotlanWaypointEdgeDiagnostics($neighbors, $graph['neighbors'], $shipType, $options, $boundedCandidates, $effectiveRange);
         if ($debugLogs && $graph['debug_sample'] !== []) {
@@ -711,12 +718,19 @@ final class NavigationEngine
         $this->lastJumpConnectivityDebug = $connectivity;
 
         if ($result['path'] === [] || ($result['path'][count($result['path']) - 1] ?? null) !== $endId) {
+            $reason = 'No jump route found.';
+            if (!empty($options['require_station_midpoints'])
+                && $this->stationConstraintMode($options) === 'strict'
+                && (($graph['station_filter_stats']['filtered_missing_station_count'] ?? 0) > 0)
+            ) {
+                $reason = 'No station-only midpoint route within range/hop constraints.';
+            }
             if ($debugLogs) {
                 $this->runJumpDiagnostics($startId, $endId, $shipType, $options, $rangeBucket);
             }
             return [
                 'feasible' => false,
-                'reason' => 'No jump route found.',
+                'reason' => $reason,
                 'nodes_explored' => $result['nodes_explored'],
                 'illegal_systems_filtered' => $graph['filtered'],
                 'min_hops_found' => $result['min_hops_found'] ?? null,
@@ -806,6 +820,7 @@ final class NavigationEngine
     {
         $queue = new \SplPriorityQueue();
         $queue->setExtractFlags(\SplPriorityQueue::EXTR_DATA);
+        $stationConstraintMode = $this->stationConstraintMode($options);
 
         $state = [
             $startId => [
@@ -857,6 +872,7 @@ final class NavigationEngine
                 $queue->insert(
                     $to,
                     [
+                        -((float) $candidate['soft_cost']),
                         -((int) $candidate['hops']),
                         -((float) $candidate['distance']),
                         -((float) $candidate['max_hop']),
@@ -907,7 +923,7 @@ final class NavigationEngine
     {
         $tolerance = 1e-9;
         $useStationSoftCost = !empty($options['require_station_midpoints'])
-            && strtolower((string) ($options['avoid_strictness'] ?? 'soft')) === 'soft';
+            && $this->stationConstraintMode($options) === 'soft';
 
         if ($useStationSoftCost) {
             if (abs((float) $candidate['soft_cost'] - (float) $existing['soft_cost']) > $tolerance) {
@@ -2051,6 +2067,8 @@ final class NavigationEngine
         $policyCount = 0;
         $rangeCount = 0;
         $cappedCount = 0;
+        $filteredMissingStationCount = 0;
+        $penalizedMissingStationCount = 0;
 
         foreach ($precomputed as $from => $toList) {
             if (!isset($this->systems[$from])) {
@@ -2088,10 +2106,19 @@ final class NavigationEngine
                 $rangeCount++;
 
                 $toIsMidpoint = $to !== $startId && $to !== $endId;
+                if ($toIsMidpoint && !empty($options['require_station_midpoints']) && $this->stationConstraintMode($options) === 'soft') {
+                    $toSystem = $this->systems[$to] ?? null;
+                    if ($toSystem !== null && empty($toSystem['has_npc_station'])) {
+                        $penalizedMissingStationCount++;
+                    }
+                }
                 $reason = $this->jumpPolicyFilterReason($shipType, $this->systems[$to], $toIsMidpoint, $options);
                 if ($reason !== null) {
                     $filtered++;
                     $filteredForNode++;
+                    if ($reason === 'filtered_station_midpoint_required') {
+                        $filteredMissingStationCount++;
+                    }
                     if (str_starts_with($reason, 'filtered_illegal_security')) {
                         $policyReasons['filtered_illegal_security'] = ($policyReasons['filtered_illegal_security'] ?? 0) + 1;
                     }
@@ -2148,6 +2175,10 @@ final class NavigationEngine
                 'jump_neighbors_after_policy_count' => $policyCount,
                 'jump_neighbors_capped_by_limit_count' => $cappedCount,
                 'policy_filter_reasons_count' => $policyReasons,
+            ],
+            'station_filter_stats' => [
+                'filtered_missing_station_count' => $filteredMissingStationCount,
+                'penalized_missing_station_count' => $penalizedMissingStationCount,
             ],
         ];
     }
@@ -3027,7 +3058,7 @@ final class NavigationEngine
             return 'filtered_illegal_security';
         }
 
-        if ($isMidpoint && !empty($options['require_station_midpoints']) && strtolower((string) ($options['avoid_strictness'] ?? 'soft')) === 'strict') {
+        if ($isMidpoint && !empty($options['require_station_midpoints']) && $this->stationConstraintMode($options) === 'strict') {
             if (empty($system['has_npc_station'])) {
                 return 'filtered_station_midpoint_required';
             }
@@ -3056,12 +3087,11 @@ final class NavigationEngine
             return ['is_violation' => false, 'penalty_hops' => 0.0];
         }
 
-        $strictness = strtolower((string) ($options['avoid_strictness'] ?? 'soft'));
-        if ($strictness === 'strict') {
+        if ($this->stationConstraintMode($options) === 'strict') {
             return ['is_violation' => true, 'penalty_hops' => INF];
         }
 
-        return ['is_violation' => true, 'penalty_hops' => 2.0];
+        return ['is_violation' => true, 'penalty_hops' => self::STATION_MIDPOINT_SOFT_PENALTY];
     }
 
     /** @param array<int, array<string, mixed>> $segments
@@ -3069,7 +3099,7 @@ final class NavigationEngine
      */
     private function annotateStationViolationsOnSegments(array $segments, array $options, int $endId): array
     {
-        if (empty($options['require_station_midpoints']) || strtolower((string) ($options['avoid_strictness'] ?? 'soft')) === 'strict') {
+        if (empty($options['require_station_midpoints']) || $this->stationConstraintMode($options) === 'strict') {
             return $segments;
         }
 
@@ -3088,7 +3118,7 @@ final class NavigationEngine
         return $segments;
     }
 
-    /** @return array{require_station_midpoints:bool,station_type:string,midpoints_with_station:string,station_midpoint_violations:array<int,string>} */
+    /** @return array{require_station_midpoints:bool,station_constraint_mode:string,station_type:string,midpoints_total:int,midpoints_with_station_count:int,midpoints_with_station:string,midpoint_station_violations:array<int,string>,station_midpoint_violations:array<int,string>,station_filter_stats:array{filtered_missing_station_count:int,penalized_missing_station_count:int}} */
     private function jumpMidpointStationDiagnostics(array $segments, array $options, int $endId): array
     {
         $totalMidpoints = 0;
@@ -3112,12 +3142,29 @@ final class NavigationEngine
             $violations[] = (string) ($segment['to'] ?? (string) $toId);
         }
 
+        $mode = $this->stationConstraintMode($options);
+
         return [
             'require_station_midpoints' => !empty($options['require_station_midpoints']),
+            'station_constraint_mode' => $mode,
             'station_type' => (string) ($options['station_type'] ?? 'npc'),
+            'midpoints_total' => $totalMidpoints,
+            'midpoints_with_station_count' => $stationMidpoints,
             'midpoints_with_station' => sprintf('%d/%d', $stationMidpoints, $totalMidpoints),
+            'midpoint_station_violations' => $violations,
             'station_midpoint_violations' => $violations,
+            'station_filter_stats' => $this->lastStationFilterStats,
         ];
+    }
+
+    private function stationConstraintMode(array $options): string
+    {
+        $mode = strtolower((string) ($options['station_constraint_mode'] ?? ''));
+        if (in_array($mode, ['soft', 'strict'], true)) {
+            return $mode;
+        }
+
+        return strtolower((string) ($options['avoid_strictness'] ?? 'soft')) === 'strict' ? 'strict' : 'soft';
     }
 
     /** @param array<int, array<int, array{to:int,type:string,distance_ly:float}>> $neighbors */

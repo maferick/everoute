@@ -19,6 +19,7 @@ final class RouteRequest
         public readonly array $avoidSystems,
         public readonly bool $preferNpc,
         public readonly bool $requireStationMidpoints,
+        public readonly string $stationConstraintMode,
         public readonly string $stationType,
         public readonly int $npcFallbackMaxExtraJumps,
         public readonly bool $allowGateReposition,
@@ -40,6 +41,7 @@ final class RouteRequest
         array $avoidSystems,
         bool $preferNpc,
         bool $requireStationMidpoints = false,
+        ?string $stationConstraintMode = null,
         ?string $stationType = null,
         ?bool $allowGateReposition = null,
         ?int $hybridGateBudgetMax = null,
@@ -60,6 +62,7 @@ final class RouteRequest
             self::normalizeAvoidSystems($avoidSystems),
             $preferNpc,
             $requireStationMidpoints,
+            self::normalizeStationConstraintMode($stationConstraintMode, $resolvedStrictness),
             self::normalizeStationType($stationType),
             $npcPolicy['npc_detour_max_extra_jumps'],
             $allowGateReposition ?? true,
@@ -96,6 +99,7 @@ final class RouteRequest
             isset($options['avoid_systems']) && is_array($options['avoid_systems']) ? $options['avoid_systems'] : [],
             (bool) ($options['prefer_npc'] ?? ($ship->mode === 'capital')),
             (bool) ($options['require_station_midpoints'] ?? ($options['use_stations'] ?? false)),
+            isset($options['station_constraint_mode']) ? (string) $options['station_constraint_mode'] : null,
             isset($options['station_type']) ? (string) $options['station_type'] : null,
             array_key_exists('allow_gate_reposition_before_first_jump', $options)
                 ? (bool) $options['allow_gate_reposition_before_first_jump']
@@ -123,6 +127,7 @@ final class RouteRequest
             'avoid_systems' => $this->avoidSystems,
             'prefer_npc' => $this->preferNpc,
             'require_station_midpoints' => $this->requireStationMidpoints,
+            'station_constraint_mode' => $this->stationConstraintMode,
             'station_type' => $this->stationType,
             'npc_fallback_max_extra_jumps' => $this->npcFallbackMaxExtraJumps,
             'allow_gate_reposition' => $this->allowGateReposition,
@@ -182,6 +187,16 @@ final class RouteRequest
         $normalized = strtolower(trim((string) $stationType));
 
         return in_array($normalized, ['npc'], true) ? $normalized : 'npc';
+    }
+
+    private static function normalizeStationConstraintMode(?string $mode, string $avoidStrictness): string
+    {
+        $normalized = strtolower(trim((string) $mode));
+        if (in_array($normalized, ['strict', 'soft'], true)) {
+            return $normalized;
+        }
+
+        return strtolower($avoidStrictness) === 'strict' ? 'strict' : 'soft';
     }
 
     /** @param array<int,mixed> $avoidSystems */
