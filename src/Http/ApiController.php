@@ -7,12 +7,19 @@ namespace Everoute\Http;
 if (!class_exists(\Everoute\Routing\PreferenceProfile::class)) {
     require_once __DIR__ . '/../Routing/PreferenceProfile.php';
 }
+if (!class_exists(\Everoute\Routing\ShipProfile::class)) {
+    require_once __DIR__ . '/../Routing/ShipProfile.php';
+}
+if (!class_exists(\Everoute\Routing\RouteRequest::class)) {
+    require_once __DIR__ . '/../Routing/RouteRequest.php';
+}
 
 use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
-use Everoute\Routing\JumpShipType;
 use Everoute\Routing\PreferenceProfile;
+use Everoute\Routing\RouteRequest;
 use Everoute\Routing\RouteService;
+use Everoute\Routing\ShipProfile;
 use Everoute\Security\RateLimiter;
 use Everoute\Security\Validator;
 use Everoute\Universe\SystemRepository;
@@ -66,7 +73,7 @@ final class ApiController
             return new JsonResponse(['error' => 'Invalid from/to'], 422);
         }
 
-        $mode = $this->validator->enum((string) ($body['mode'] ?? 'subcap'), ['hauling', 'subcap', 'capital'], 'subcap');
+        $mode = $this->validator->enum((string) ($body['mode'] ?? ShipProfile::DEFAULT_MODE), ['hauling', 'subcap', 'capital'], ShipProfile::DEFAULT_MODE);
         $shipClass = $this->validator->enum((string) ($body['ship_class'] ?? 'subcap'), [
             'interceptor',
             'subcap',
@@ -77,96 +84,71 @@ final class ApiController
             'super',
             'titan',
         ], 'subcap');
-
         $jumpShipType = $this->validator->string($body['jump_ship_type'] ?? null);
-        if ($jumpShipType === null || $jumpShipType === '') {
-            $jumpShipType = $shipClass === 'jump_freighter' ? JumpShipType::JUMP_FREIGHTER : JumpShipType::CARRIER;
-        }
-        if (in_array($shipClass, ['capital', 'jump_freighter', 'super', 'titan'], true)) {
-            $mode = 'capital';
-        }
-        $safety = $this->validator->int($body['safety_vs_speed'] ?? null, 0, 100, $mode === 'capital' ? 70 : 50);
+        $jumpSkillLevel = $this->validator->int($body['jump_skill_level'] ?? null, 0, 5, 5);
+
+        $isCapitalRequest = in_array($shipClass, ['capital', 'jump_freighter', 'super', 'titan'], true);
+        $safety = $this->validator->int($body['safety_vs_speed'] ?? null, 0, 100, $isCapitalRequest ? 70 : 50);
         $requestedProfile = $this->validator->enum(
             strtolower((string) ($body['preference_profile'] ?? $body['profile'] ?? '')),
             [PreferenceProfile::SPEED, PreferenceProfile::BALANCED, PreferenceProfile::SAFETY],
             ''
         );
-        $resolvedPreferenceProfile = PreferenceProfile::resolve($requestedProfile !== '' ? $requestedProfile : null, $safety);
         $preference = $this->validator->enum((string) ($body['preference'] ?? 'shorter'), ['shorter', 'safer', 'less_secure'], 'shorter');
-        $jumpSkillLevel = $this->validator->int($body['jump_skill_level'] ?? null, 0, 5, 5);
+
         $avoidLowsec = $this->validator->bool($body['avoid_lowsec'] ?? null, false);
         $avoidNullsec = $this->validator->bool($body['avoid_nullsec'] ?? null, false);
-        $defaultStrictness = ($avoidLowsec || $avoidNullsec) ? 'strict' : 'soft';
-
-        $preferNpc = $this->validator->bool($body['prefer_npc_stations'] ?? null, $mode === 'capital');
-        $npcDetourPolicy = $this->deriveNpcDetourPolicy($safety, $preferNpc);
+        $preferNpc = $this->validator->bool($body['prefer_npc_stations'] ?? null, $isCapitalRequest);
 
         $fuelPerLyFactorRaw = $body['fuel_per_ly_factor'] ?? (($body['ship_profile']['fuel_per_ly_factor'] ?? null));
-        $fuelPerLyFactor = is_numeric($fuelPerLyFactorRaw) ? max(0.0, (float) $fuelPerLyFactorRaw) : null;
+        $fuelPerLyFactor = is_numeric($fuelPerLyFactorRaw) ? (float) $fuelPerLyFactorRaw : null;
 
-        $options = [
-            'from' => $from,
-            'to' => $to,
-            'mode' => $mode,
-            'ship_class' => $shipClass,
-            'jump_ship_type' => $jumpShipType,
-            'jump_skill_level' => $jumpSkillLevel,
-            'safety_vs_speed' => $safety,
-            'preference' => $preference,
-            'avoid_lowsec' => $avoidLowsec,
-            'avoid_nullsec' => $avoidNullsec,
-            'avoid_strictness' => $this->validator->enum(
-                strtolower((string) ($body['avoid_strictness'] ?? $defaultStrictness)),
+        $shipProfile = ShipProfile::create(
+            $mode,
+            $shipClass,
+            $jumpShipType,
+            $jumpSkillLevel,
+            $fuelPerLyFactor,
+            null
+        );
+
+        $routeRequest = RouteRequest::create(
+            $from,
+            $to,
+            $shipProfile,
+            PreferenceProfile::create($requestedProfile !== '' ? $requestedProfile : null, $safety),
+            $preference,
+            $avoidLowsec,
+            $avoidNullsec,
+            $this->validator->enum(
+                strtolower((string) ($body['avoid_strictness'] ?? '')),
                 ['soft', 'strict'],
-                $defaultStrictness
+                ''
             ),
-            'avoid_systems' => isset($body['avoid_specific_systems']) ? $this->validator->list((string) $body['avoid_specific_systems']) : [],
-            'prefer_npc' => $preferNpc,
-            'npc_fallback_max_extra_jumps' => $npcDetourPolicy['npc_detour_max_extra_jumps'],
-            'ship_modifier' => $this->shipModifier($shipClass),
-            'fuel_per_ly_factor' => $fuelPerLyFactor,
-            'preference_profile' => $resolvedPreferenceProfile,
-        ];
+            isset($body['avoid_specific_systems']) ? $this->validator->list((string) $body['avoid_specific_systems']) : [],
+            $preferNpc
+        );
 
-        $result = $this->routes->computeRoutes($options);
+        $result = $this->routes->computeRoutes($routeRequest);
         if (isset($result['error'])) {
             $status = $result['error'] === 'not_feasible' ? 422 : 404;
             return new JsonResponse($result, $status);
         }
 
+        $selectedPolicy = $routeRequest->selectedPolicy();
         $result['risk_updated_at'] = $this->risk->getLatestUpdate(Env::get('RISK_PROVIDER', 'esi_system_kills'));
-        $result['selected_policy'] = $npcDetourPolicy;
+        $result['selected_policy'] = $selectedPolicy;
         $result['explanation'][] = sprintf(
             'NPC detour policy: %s side at %d%% (%s).',
-            $npcDetourPolicy['slider_side'],
-            $safety,
-            $npcDetourPolicy['npc_detour_note']
+            $selectedPolicy['slider_side'],
+            $routeRequest->preferenceProfile->safetyVsSpeed,
+            $selectedPolicy['npc_detour_note']
         );
         if (isset($result['debug']) && is_array($result['debug'])) {
-            $result['debug']['selected_policy'] = $npcDetourPolicy;
+            $result['debug']['selected_policy'] = $selectedPolicy;
         }
 
         return new JsonResponse($result);
-    }
-
-    /**
-     * @return array{slider_side: string, safety_vs_speed: int, prefer_npc_stations: bool, npc_detour_max_extra_jumps: int, npc_detour_note: string}
-     */
-    private function deriveNpcDetourPolicy(int $safetyVsSpeed, bool $preferNpcStations): array
-    {
-        $sliderSide = $safetyVsSpeed <= 50 ? 'speed' : 'safety';
-        $extraJumps = ($preferNpcStations && $sliderSide === 'safety') ? 1 : 0;
-        $note = $extraJumps > 0
-            ? 'may accept +1 jump detour for NPC coverage'
-            : 'no extra jump allowed for NPC coverage';
-
-        return [
-            'slider_side' => $sliderSide,
-            'safety_vs_speed' => $safetyVsSpeed,
-            'prefer_npc_stations' => $preferNpcStations,
-            'npc_detour_max_extra_jumps' => $extraJumps,
-            'npc_detour_note' => $note,
-        ];
     }
 
     public function systemSearch(Request $request): Response
@@ -224,17 +206,5 @@ final class ApiController
             'updated_at' => $this->risk->getLatestUpdate(),
             'systems' => $this->risk->getHeatmap(),
         ]);
-    }
-
-    private function shipModifier(string $shipClass): float
-    {
-        return match ($shipClass) {
-            'interceptor' => 0.4,
-            'dst' => 1.4,
-            'freighter' => 1.8,
-            'capital' => 2.2,
-            'jump_freighter' => 2.0,
-            default => 1.0,
-        };
     }
 }

@@ -27,10 +27,11 @@ final class RouteService
         $this->engine->refresh();
     }
 
-    public function computeRoutes(array $options): array
+    public function computeRoutes(array|RouteRequest $options): array
     {
         try {
-            $cacheKey = $this->routeCacheKey($options);
+            $request = $options instanceof RouteRequest ? $options : RouteRequest::fromLegacyOptions($options);
+            $cacheKey = $this->routeCacheKey($request);
             if ($this->cache) {
                 try {
                     $cached = $this->cache->getJson($cacheKey);
@@ -44,7 +45,7 @@ final class RouteService
                 }
             }
 
-            $payload = $this->engine->compute($options);
+            $payload = $this->engine->compute($request);
 
             if ($this->cache && !isset($payload['error'])) {
                 try {
@@ -62,9 +63,9 @@ final class RouteService
         }
     }
 
-    private function routeCacheKey(array $options): string
+    private function routeCacheKey(RouteRequest $request): string
     {
-        $payload = $options;
+        $payload = $request->toLegacyOptions();
         $payload['fatigue_model_version'] = (string) ($payload['fatigue_model_version'] ?? JumpFatigueModel::VERSION);
         $avoidLowsec = !empty($payload['avoid_lowsec']);
         $avoidNullsec = !empty($payload['avoid_nullsec']);
