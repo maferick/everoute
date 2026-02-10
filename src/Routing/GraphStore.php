@@ -22,6 +22,8 @@ final class GraphStore
     private static array $gateNeighbors = [];
     /** @var array<int, array<int, array{to: int, is_regional_gate: bool}>> */
     private static array $reverseAdjacency = [];
+    /** @var array<int, int> */
+    private static array $regionalGateDistance = [];
 
     public static function load(SystemRepository $systemsRepo, StargateRepository $stargatesRepo, Logger $logger): void
     {
@@ -41,6 +43,8 @@ final class GraphStore
         self::$adjacency = [];
         self::$gateNeighbors = [];
         self::$reverseAdjacency = [];
+        self::$regionalGateDistance = [];
+        $regionalGateSeeds = [];
         foreach ($stargatesRepo->allEdges() as $edge) {
             $from = (int) $edge['from_system_id'];
             $to = (int) $edge['to_system_id'];
@@ -49,6 +53,41 @@ final class GraphStore
             self::$adjacency[$from][] = ['to' => $to, 'is_regional_gate' => $isRegional];
             self::$gateNeighbors[$from][] = $to;
             self::$reverseAdjacency[$to][] = ['to' => $from, 'is_regional_gate' => $isRegional];
+            if ($isRegional) {
+                $regionalGateSeeds[$from] = true;
+                $regionalGateSeeds[$to] = true;
+            }
+        }
+
+        if ($regionalGateSeeds !== []) {
+            $queue = new \SplQueue();
+            foreach (array_keys($regionalGateSeeds) as $systemId) {
+                self::$regionalGateDistance[$systemId] = 0;
+                $queue->enqueue($systemId);
+            }
+            while (!$queue->isEmpty()) {
+                $current = (int) $queue->dequeue();
+                $currentDistance = self::$regionalGateDistance[$current] ?? 0;
+                $neighbors = self::$gateNeighbors[$current] ?? [];
+                foreach (self::$reverseAdjacency[$current] ?? [] as $edge) {
+                    $neighbors[] = (int) ($edge['to'] ?? 0);
+                }
+                foreach (array_unique($neighbors) as $neighbor) {
+                    if ($neighbor === 0) {
+                        continue;
+                    }
+                    if (!isset(self::$regionalGateDistance[$neighbor])) {
+                        self::$regionalGateDistance[$neighbor] = $currentDistance + 1;
+                        $queue->enqueue($neighbor);
+                    }
+                }
+            }
+        }
+
+        foreach (self::$regionalGateDistance as $systemId => $distance) {
+            if (isset(self::$systems[$systemId])) {
+                self::$systems[$systemId]['regional_gate_distance'] = $distance;
+            }
         }
 
         self::$loaded = true;
@@ -112,6 +151,12 @@ final class GraphStore
     public static function reverseAdjacency(): array
     {
         return self::$reverseAdjacency;
+    }
+
+    /** @return array<int, int> */
+    public static function regionalGateDistance(): array
+    {
+        return self::$regionalGateDistance;
     }
 
     public static function systemCount(): int
