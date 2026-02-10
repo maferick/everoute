@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Everoute\Routing;
 
 use Everoute\Cache\RedisCache;
+use Everoute\Risk\RiskRepository;
 use Everoute\Security\Logger;
+use Everoute\Universe\StaticMetaRepository;
 
 final class RouteService
 {
@@ -13,7 +15,10 @@ final class RouteService
         private NavigationEngine $engine,
         private Logger $logger,
         private ?RedisCache $cache = null,
-        private int $routeCacheTtlSeconds = 600
+        private int $routeCacheTtlSeconds = 600,
+        private ?StaticMetaRepository $staticMetaRepository = null,
+        private ?RiskRepository $riskRepository = null,
+        private int $riskEpochBucketSeconds = 300
     ) {
     }
 
@@ -76,7 +81,78 @@ final class RouteService
         if (isset($payload['avoid_systems']) && is_array($payload['avoid_systems'])) {
             sort($payload['avoid_systems']);
         }
-        ksort($payload);
+
+        $payload['static_build_id'] = $this->resolveStaticBuildIdentifier();
+        $payload['risk_epoch_bucket'] = $this->resolveRiskEpochBucket();
+
+        $payload = $this->normalizeForCacheKey($payload);
         return 'route:' . hash('sha256', json_encode($payload, JSON_UNESCAPED_SLASHES));
+    }
+
+    private function resolveStaticBuildIdentifier(): string
+    {
+        if ($this->staticMetaRepository === null) {
+            return 'unknown-static-build';
+        }
+
+        try {
+            return $this->staticMetaRepository->cacheBuildIdentifier();
+        } catch (\Throwable $exception) {
+            $this->logger->warning('Route cache static build id lookup failed', [
+                'error' => $exception->getMessage(),
+            ]);
+            return 'unknown-static-build';
+        }
+    }
+
+    private function resolveRiskEpochBucket(): int
+    {
+        if ($this->riskRepository === null) {
+            return intdiv(time(), max(1, $this->riskEpochBucketSeconds));
+        }
+
+        try {
+            return $this->riskRepository->latestRiskEpochBucket($this->riskEpochBucketSeconds);
+        } catch (\Throwable $exception) {
+            $this->logger->warning('Route cache risk epoch lookup failed', [
+                'error' => $exception->getMessage(),
+            ]);
+            return intdiv(time(), max(1, $this->riskEpochBucketSeconds));
+        }
+    }
+
+    private function normalizeForCacheKey(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        $isList = array_keys($value) === range(0, count($value) - 1);
+        if ($isList) {
+            $normalized = [];
+            foreach ($value as $entry) {
+                $normalized[] = $this->normalizeForCacheKey($entry);
+            }
+
+            $allScalars = true;
+            foreach ($normalized as $entry) {
+                if (!is_scalar($entry) && $entry !== null) {
+                    $allScalars = false;
+                    break;
+                }
+            }
+            if ($allScalars) {
+                sort($normalized);
+            }
+
+            return $normalized;
+        }
+
+        ksort($value);
+        foreach ($value as $key => $entry) {
+            $value[$key] = $this->normalizeForCacheKey($entry);
+        }
+
+        return $value;
     }
 }

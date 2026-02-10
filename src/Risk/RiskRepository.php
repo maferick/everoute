@@ -96,6 +96,51 @@ final class RiskRepository
         return $latest;
     }
 
+
+    public function latestRiskEpochBucket(int $bucketSeconds = 300, ?string $provider = null): int
+    {
+        $bucketSeconds = max(1, $bucketSeconds);
+        $cacheKey = sprintf('risk:epoch_bucket:%d:%s', $bucketSeconds, $provider ?? 'global');
+        if ($this->cache) {
+            $cached = $this->cache->get($cacheKey);
+            if ($cached !== null && ctype_digit((string) $cached)) {
+                return (int) $cached;
+            }
+        }
+
+        $timestamp = null;
+        if ($provider) {
+            $stmt = $this->connection->pdo()->prepare('SELECT COALESCE(updated_at, checked_at, last_modified) AS latest FROM risk_meta WHERE provider = :provider LIMIT 1');
+            $stmt->execute(['provider' => $provider]);
+            $row = $stmt->fetch();
+            if (is_array($row)) {
+                $timestamp = $row['latest'] ?? null;
+            }
+        }
+
+        if ($timestamp === null) {
+            $stmt = $this->connection->pdo()->query('SELECT MAX(COALESCE(risk_updated_at, last_updated_at, updated_at)) AS latest FROM system_risk');
+            $row = $stmt?->fetch();
+            if (is_array($row)) {
+                $timestamp = $row['latest'] ?? null;
+            }
+        }
+
+        $epoch = is_string($timestamp) ? strtotime($timestamp) : false;
+        if (!is_int($epoch) || $epoch <= 0) {
+            $epoch = time();
+        }
+
+        $bucket = intdiv($epoch, $bucketSeconds);
+
+        if ($this->cache) {
+            $ttl = min($this->cacheTtlSeconds, $bucketSeconds);
+            $this->cache->set($cacheKey, (string) $bucket, max(1, $ttl));
+        }
+
+        return $bucket;
+    }
+
     public function listChokepoints(): array
     {
         if ($this->cache) {
