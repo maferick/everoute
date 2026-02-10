@@ -37,9 +37,11 @@ $formatLy = static function (?float $value): string {
 };
 
 $formatSecurity = static function (array $system): string {
-    $raw = $system['security_raw'] ?? null;
-    $securitySource = is_numeric($raw) ? (float) $raw : (float) ($system['security'] ?? 0.0);
-    $security = floor($securitySource * 10.0) / 10.0;
+    $security = (float) ($system['security_nav'] ?? $system['security'] ?? 0.0);
+    $security = round($security, 1, PHP_ROUND_HALF_UP);
+    if (abs($security) < 0.05) {
+        $security = 0.0;
+    }
     return number_format($security, 1);
 };
 

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Everoute\Cli;
 
+use Everoute\Universe\SecurityStatus;
+use PDO;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -67,11 +69,9 @@ final class PrecomputeSystemFactsCommand extends Command
         $output->writeln('<info>Updating system classification flags...</info>');
         $output->writeln('<info>Updating security class and legality masks...</info>');
 
-        $driftStmt = $pdo->query('SELECT COUNT(*) AS total FROM systems WHERE ABS(COALESCE(security_nav, FLOOR(COALESCE(security_raw, security) * 10) / 10) - (FLOOR(COALESCE(security_raw, security) * 10) / 10)) >= 0.1 OR ABS(COALESCE(security, FLOOR(COALESCE(security_raw, security) * 10) / 10) - (FLOOR(COALESCE(security_raw, security) * 10) / 10)) >= 0.1');
-        $driftRow = $driftStmt !== false ? $driftStmt->fetch() : [];
-        $driftCount = (int) ($driftRow['total'] ?? 0);
+        $driftCount = $this->recomputeSecurityFields($pdo);
         if ($driftCount > 0) {
-            $output->writeln(sprintf('<comment>Detected %d systems with security drift; applying sec_effective floor normalization.</comment>', $driftCount));
+            $output->writeln(sprintf('<comment>Detected %d systems with security drift; applying security_display half-up normalization.</comment>', $driftCount));
         }
 
         $pdo->exec(
@@ -84,20 +84,13 @@ final class PrecomputeSystemFactsCommand extends Command
                     WHEN region_id BETWEEN 10000001 AND 10001000 THEN 1
                     ELSE 0
                 END,
-                security = FLOOR(COALESCE(security_raw, security) * 10) / 10,
-                security_nav = FLOOR(COALESCE(security_raw, security) * 10) / 10,
-                sec_class = CASE
-                    WHEN FLOOR(COALESCE(security_raw, security) * 10) / 10 >= 0.5 THEN "high"
-                    WHEN FLOOR(COALESCE(security_raw, security) * 10) / 10 >= 0.0 THEN "low"
-                    ELSE "null"
-                END,
                 legal_mask =
-                    (CASE WHEN FLOOR(COALESCE(security_raw, security) * 10) / 10 < 0.5 THEN 1 ELSE 0 END)
-                    | (CASE WHEN FLOOR(COALESCE(security_raw, security) * 10) / 10 < 0.5 THEN 2 ELSE 0 END)
-                    | (CASE WHEN FLOOR(COALESCE(security_raw, security) * 10) / 10 < 0.5 THEN 4 ELSE 0 END)
-                    | (CASE WHEN FLOOR(COALESCE(security_raw, security) * 10) / 10 < 0.5 THEN 8 ELSE 0 END)
-                    | (CASE WHEN FLOOR(COALESCE(security_raw, security) * 10) / 10 < 0.5 THEN 16 ELSE 0 END)
-                    | (CASE WHEN FLOOR(COALESCE(security_raw, security) * 10) / 10 < 0.5 THEN 32 ELSE 0 END)'
+                    (CASE WHEN sec_class <> "high" THEN 1 ELSE 0 END)
+                    | (CASE WHEN sec_class <> "high" THEN 2 ELSE 0 END)
+                    | (CASE WHEN sec_class <> "high" THEN 4 ELSE 0 END)
+                    | (CASE WHEN sec_class <> "high" THEN 8 ELSE 0 END)
+                    | (CASE WHEN sec_class <> "high" THEN 16 ELSE 0 END)
+                    | (CASE WHEN sec_class <> "high" THEN 32 ELSE 0 END)'
         );
 
         $output->writeln(sprintf('<info>Updating near-boundary system flags (radius=%d)...</info>', $boundaryRadius));
@@ -141,5 +134,44 @@ final class PrecomputeSystemFactsCommand extends Command
 
         $output->writeln('<info>System facts updated.</info>');
         return Command::SUCCESS;
+    }
+
+    private function recomputeSecurityFields(PDO $pdo): int
+    {
+        $rows = $pdo->query('SELECT id, security_raw, security_nav, security, sec_class FROM systems');
+        if ($rows === false) {
+            return 0;
+        }
+
+        $update = $pdo->prepare('UPDATE systems SET security = :security, security_nav = :security_nav, sec_class = :sec_class WHERE id = :id');
+        $changed = 0;
+
+        foreach ($rows->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $securityTrue = SecurityStatus::normalizeSecurityRaw((float) ($row['security_raw'] ?? $row['security'] ?? 0.0));
+            $securityDisplay = SecurityStatus::secDisplayFromRaw($securityTrue);
+            $secClass = SecurityStatus::secBandFromDisplay($securityDisplay);
+
+            $currentSecurity = isset($row['security']) ? (float) $row['security'] : null;
+            $currentNav = isset($row['security_nav']) ? (float) $row['security_nav'] : null;
+            $currentClass = (string) ($row['sec_class'] ?? '');
+
+            if (
+                $currentSecurity !== null && abs($currentSecurity - $securityDisplay) < 0.0001
+                && $currentNav !== null && abs($currentNav - $securityDisplay) < 0.0001
+                && $currentClass === $secClass
+            ) {
+                continue;
+            }
+
+            $update->execute([
+                'id' => (int) $row['id'],
+                'security' => $securityDisplay,
+                'security_nav' => $securityDisplay,
+                'sec_class' => $secClass,
+            ]);
+            $changed++;
+        }
+
+        return $changed;
     }
 }

@@ -79,7 +79,7 @@ final class SdeImporter
             id BIGINT PRIMARY KEY,
             name VARCHAR(128) NOT NULL,
             security DECIMAL(4,2) NOT NULL,
-            security_raw DECIMAL(4,2) NOT NULL,
+            security_raw DECIMAL(6,4) NOT NULL,
             security_nav DECIMAL(4,2) NOT NULL,
             sec_class VARCHAR(16) NOT NULL DEFAULT \'null\',
             near_constellation_boundary TINYINT(1) NOT NULL DEFAULT 0,
@@ -126,7 +126,7 @@ final class SdeImporter
             id BIGINT PRIMARY KEY,
             name VARCHAR(128) NOT NULL UNIQUE,
             security DECIMAL(4,2) NOT NULL,
-            security_raw DECIMAL(4,2) NOT NULL,
+            security_raw DECIMAL(6,4) NOT NULL,
             security_nav DECIMAL(4,2) NOT NULL,
             sec_class VARCHAR(16) NOT NULL DEFAULT \'null\',
             near_constellation_boundary TINYINT(1) NOT NULL DEFAULT 0,
@@ -195,7 +195,7 @@ final class SdeImporter
         $this->ensureStargateIndex($pdo, 'idx_region_boundary', 'is_region_boundary');
         $this->ensureSystemColumn($pdo, 'has_npc_station', 'TINYINT(1) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'npc_station_count', 'INT NOT NULL DEFAULT 0');
-        $this->ensureSystemColumn($pdo, 'security_raw', 'DECIMAL(4,2) NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'security_raw', 'DECIMAL(6,4) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'security_nav', 'DECIMAL(4,2) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'sec_class', 'VARCHAR(16) NOT NULL DEFAULT \'null\'');
         $this->ensureSystemColumn($pdo, 'near_constellation_boundary', 'TINYINT(1) NOT NULL DEFAULT 0');
@@ -566,8 +566,8 @@ final class SdeImporter
         $id = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['id'] ?? $row['_key'] ?? $row['key'] ?? 0);
         $name = $this->normalizeName($row['solarSystemName'] ?? $row['name'] ?? null, 'Unknown');
         $securityRaw = SecurityStatus::normalizeSecurityRaw((float) ($row['security'] ?? $row['securityStatus'] ?? 0.0));
-        $securityEffective = SecurityStatus::secEffectiveFromRaw($securityRaw);
-        $secClass = SecurityStatus::secBandFromEffective($securityEffective);
+        $securityDisplay = SecurityStatus::secDisplayFromRaw($securityRaw);
+        $secClass = SecurityStatus::secBandFromDisplay($securityDisplay);
         $regionId = $row['regionID'] ?? $row['regionId'] ?? $row['region_id'] ?? null;
         $constellationId = $row['constellationID'] ?? $row['constellationId'] ?? $row['constellation_id'] ?? null;
         $position = is_array($row['position'] ?? null) ? $row['position'] : [];
@@ -591,9 +591,9 @@ final class SdeImporter
         return [
             'id' => $id,
             'name' => $name,
-            'security' => $securityEffective,
+            'security' => $securityDisplay,
             'security_raw' => $securityRaw,
-            'security_nav' => $securityEffective,
+            'security_nav' => $securityDisplay,
             'sec_class' => $secClass,
             'near_constellation_boundary' => 0,
             'near_region_boundary' => 0,

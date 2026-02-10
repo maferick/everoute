@@ -137,7 +137,6 @@ final class SystemRepository
 
     private function systemSelectFields(): string
     {
-        $securityExpr = 'FLOOR(COALESCE(security_raw, security) * 10) / 10';
-        return "id, name, {$securityExpr} AS security, security_raw, {$securityExpr} AS security_nav, region_id, constellation_id, is_wormhole, is_normal_universe, has_npc_station, npc_station_count, system_size_au, x, y, z";
+        return "id, name, security, security_raw, security_nav, sec_class, region_id, constellation_id, is_wormhole, is_normal_universe, has_npc_station, npc_station_count, system_size_au, x, y, z";
     }
 }
