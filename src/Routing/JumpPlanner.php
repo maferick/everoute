@@ -467,7 +467,7 @@ final class JumpPlanner
 
     private function avoidPenalty(array $system, array $options): float
     {
-        $security = (float) ($system['security'] ?? 0.0);
+        $security = SecurityNav::getSecurityForRouting($system);
         $penalty = 0.0;
         if (!empty($options['avoid_nullsec']) && $security < 0.1) {
             $penalty += 2.5;
@@ -633,8 +633,8 @@ final class JumpPlanner
                 ];
             }
 
-            $fromHigh = $this->rules->getSystemSpaceType($from) === 'highsec';
-            $toHigh = $this->rules->getSystemSpaceType($to) === 'highsec';
+            $fromHigh = SecurityNav::isIllegalHighsecForCapital($from, $options);
+            $toHigh = SecurityNav::isIllegalHighsecForCapital($to, $options);
 
             if ($isCapital && ($fromHigh || $toHigh)) {
                 if ($index === 0 && $fromHigh) {

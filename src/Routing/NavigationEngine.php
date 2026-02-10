@@ -237,8 +237,12 @@ final class NavigationEngine
     {
         $pairs = [
             ['1-SMEB', 'Irmalin'],
-            ['1-SMEB', 'RCI-VL'],
-            ['1-SMEB', 'Sakht'],
+            ['Irmalin', 'Rilera'],
+            ['Rilera', 'Liparer'],
+            ['Liparer', 'Noranim'],
+            ['Noranim', 'Ahbazon'],
+            ['Ahbazon', 'Fasse'],
+            ['Fasse', 'Amamake'],
         ];
         $result = [];
         foreach ($pairs as [$fromName, $toName]) {
@@ -264,11 +268,13 @@ final class NavigationEngine
     private function dotlanWaypointEdgeDiagnostics(array $precomputed, array $generated, string $shipType, array $options, ?array $allowedSystems, float $effectiveRange): array
     {
         $pairs = [
-            ['from' => 'Irmalin', 'to' => 'Chamemi'],
-            ['from' => 'Chamemi', 'to' => 'Liparer'],
-            ['from' => 'Liparer', 'to' => 'Murethand'],
-            ['from' => 'Murethand', 'to' => 'Siseide'],
-            ['from' => 'Siseide', 'to' => 'Amamake'],
+            ['from' => '1-SMEB', 'to' => 'Irmalin'],
+            ['from' => 'Irmalin', 'to' => 'Rilera'],
+            ['from' => 'Rilera', 'to' => 'Liparer'],
+            ['from' => 'Liparer', 'to' => 'Noranim'],
+            ['from' => 'Noranim', 'to' => 'Ahbazon'],
+            ['from' => 'Ahbazon', 'to' => 'Fasse'],
+            ['from' => 'Fasse', 'to' => 'Amamake'],
         ];
 
         $results = [];
@@ -2065,11 +2071,16 @@ final class NavigationEngine
                     }
                     $policyReasons[$reason] = ($policyReasons[$reason] ?? 0) + 1;
                     if ($debugLogs) {
+                        $fromSec = SecurityNav::debugComparison($this->systems[$from]);
+                        $toSec = SecurityNav::debugComparison($this->systems[$to]);
                         $this->logger->debug('Jump edge filtered for legality', [
                             'from' => $this->systems[$from]['name'] ?? (string) $from,
                             'to' => $this->systems[$to]['name'] ?? (string) $to,
-                            'from_sec' => SecurityNav::value($this->systems[$from]),
-                            'to_sec' => SecurityNav::value($this->systems[$to]),
+                            'from_raw' => $fromSec['security_raw'],
+                            'from_sec_routing' => $fromSec['sec_routing'],
+                            'to_raw' => $toSec['security_raw'],
+                            'to_sec_routing' => $toSec['sec_routing'],
+                            'threshold' => SecurityNav::HIGH_SEC_MIN,
                             'reason' => $reason,
                         ]);
                     }
@@ -2922,7 +2933,7 @@ final class NavigationEngine
         $strictness = strtolower((string) ($policy['strictness'] ?? 'soft'));
         $isStrict = $strictness === 'strict';
 
-        if ($security >= SecurityNav::HIGH_SEC_MIN) {
+        if (SecurityNav::isIllegalHighsecForCapital($system, $policy)) {
             return self::SYSTEM_ILLEGAL_HARD;
         }
 
@@ -2963,8 +2974,18 @@ final class NavigationEngine
             ]);
 
             if ($legality === self::SYSTEM_ILLEGAL_HARD) {
-                $security = SecurityNav::value($system);
-                if ($security >= SecurityNav::HIGH_SEC_MIN) {
+                $security = SecurityNav::getSecurityForRouting($system);
+                if (SecurityNav::isIllegalHighsecForCapital($system, $options)) {
+                    $comparison = SecurityNav::debugComparison($system);
+                    $this->logger->debug('Rejected system: highsec forbidden for capital routing', [
+                        'system' => $system['name'] ?? (string) ($system['id'] ?? 'unknown'),
+                        'security_raw' => $comparison['security_raw'],
+                        'sec_routing' => $comparison['sec_routing'],
+                        'threshold' => SecurityNav::HIGH_SEC_MIN,
+                        'security_nav' => $comparison['sec_nav'],
+                        'strategy' => $comparison['strategy'],
+                    ]);
+
                     return 'filtered_illegal_security_highsec_forbidden';
                 }
                 if ($security >= 0.0 && !empty($options['avoid_lowsec']) && $isMidpoint) {
