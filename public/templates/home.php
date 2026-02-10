@@ -11,6 +11,15 @@ $engineRoutes = $result ? [
 $effectiveRange = $result['effective_range_ly'] ?? null;
 $hasResult = $result && empty($result['error']);
 $best = $result['best'] ?? null;
+$topLevelFallbackWarning = !empty($result['fallback_warning']);
+$topLevelFallbackMessage = $result['fallback_message'] ?? null;
+
+$selectedAvoidStrictness = strtolower((string) ($_POST['avoid_strictness'] ?? ''));
+if (!in_array($selectedAvoidStrictness, ['soft', 'strict'], true)) {
+    $selectedAvoidStrictness = !empty($_POST['avoid_lowsec']) || !empty($_POST['avoid_nullsec'])
+        ? 'strict'
+        : 'soft';
+}
 
 $shipLabel = '';
 if (!empty($_POST['mode']) && $_POST['mode'] === 'capital') {
@@ -213,6 +222,13 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                         <label class="toggle"><input type="checkbox" name="prefer_npc_stations" <?= !empty($_POST['prefer_npc_stations']) ? 'checked' : '' ?>> Prefer NPC stations</label>
                         <label class="toggle"><input type="checkbox" name="debug" <?= !empty($_POST['debug']) ? 'checked' : '' ?>> Debug</label>
                     </div>
+                    <label>
+                        Avoid strictness
+                        <select name="avoid_strictness">
+                            <option value="soft" <?= $selectedAvoidStrictness === 'soft' ? 'selected' : '' ?>>Soft (best effort penalties)</option>
+                            <option value="strict" <?= $selectedAvoidStrictness === 'strict' ? 'selected' : '' ?>>Strict (hard avoid, fallback if needed)</option>
+                        </select>
+                    </label>
                 </div>
 
                 <div class="form-section">
@@ -241,8 +257,17 @@ if (!empty($engineRoutes['Gate']['segments'])) {
             </div>
 
             <?php if ($hasResult): ?>
+                <?php if ($topLevelFallbackWarning): ?>
+                    <div class="fallback-alert" role="alert">
+                        <strong>Fallback warning:</strong>
+                        <span><?= htmlspecialchars((string) ($topLevelFallbackMessage ?? 'Strict avoid produced no feasible route; showing best effort.'), ENT_QUOTES) ?></span>
+                    </div>
+                <?php endif; ?>
                 <?php if ($best && $best !== 'none'): ?>
                     <p class="muted">Best option: <?= htmlspecialchars($best, ENT_QUOTES) ?></p>
+                    <?php if (!empty($topLevelFallbackMessage)): ?>
+                        <p class="muted">Fallback details: <?= htmlspecialchars((string) $topLevelFallbackMessage, ENT_QUOTES) ?></p>
+                    <?php endif; ?>
                 <?php endif; ?>
                 <p class="muted">Risk is based on ship/pod kills in the last hour from CCP ESI; systems not listed are treated as zero.</p>
 
@@ -266,6 +291,9 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                         $waitTotalMinutes = $route['total_wait_minutes'] ?? null;
                         $sameAsGate = $label === 'Hybrid' && $gateKey && $segments && $gateKey === $buildRouteKey($segments);
                         $stepsCount = count($segments);
+                        $requestedStrictness = strtolower((string) ($route['requested_avoid_strictness'] ?? 'soft'));
+                        $appliedStrictness = strtolower((string) ($route['applied_avoid_strictness'] ?? 'soft'));
+                        $fallbackUsed = !empty($route['fallback_used']);
                         $systems = $route['systems'] ?? [];
                         $fromName = $systems[0]['name'] ?? ($segments[0]['from'] ?? 'Unknown');
                         $toName = $stepsCount > 0
@@ -281,6 +309,16 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                                     <span class="badge danger">Not feasible</span>
                                 <?php endif; ?>
                             </div>
+
+                            <div class="strictness-meta">
+                                <div><span class="kpi-label">Requested strictness:</span> <span class="kpi-value"><?= htmlspecialchars($requestedStrictness, ENT_QUOTES) ?></span></div>
+                                <div><span class="kpi-label">Applied strictness:</span> <span class="kpi-value"><?= htmlspecialchars($appliedStrictness, ENT_QUOTES) ?></span></div>
+                                <div><span class="kpi-label">Fallback used:</span> <span class="kpi-value"><?= $fallbackUsed ? 'Yes' : 'No' ?></span></div>
+                            </div>
+
+                            <?php if ($fallbackUsed): ?>
+                                <p class="fallback-inline">Strict avoid produced no feasible route; showing best effort.</p>
+                            <?php endif; ?>
 
                             <?php if ($isFeasible): ?>
                                 <div class="kpi-grid">
