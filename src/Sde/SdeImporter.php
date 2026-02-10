@@ -565,8 +565,9 @@ final class SdeImporter
     {
         $id = (int) ($row['solarSystemID'] ?? $row['solarSystemId'] ?? $row['id'] ?? $row['_key'] ?? $row['key'] ?? 0);
         $name = $this->normalizeName($row['solarSystemName'] ?? $row['name'] ?? null, 'Unknown');
-        $securityRaw = (float) ($row['security'] ?? $row['securityStatus'] ?? 0.0);
-        $securityNav = SecurityStatus::navFromRaw($securityRaw);
+        $securityRaw = SecurityStatus::normalizeSecurityRaw((float) ($row['security'] ?? $row['securityStatus'] ?? 0.0));
+        $securityEffective = SecurityStatus::secEffectiveFromRaw($securityRaw);
+        $secClass = SecurityStatus::secBandFromEffective($securityEffective);
         $regionId = $row['regionID'] ?? $row['regionId'] ?? $row['region_id'] ?? null;
         $constellationId = $row['constellationID'] ?? $row['constellationId'] ?? $row['constellation_id'] ?? null;
         $position = is_array($row['position'] ?? null) ? $row['position'] : [];
@@ -590,10 +591,10 @@ final class SdeImporter
         return [
             'id' => $id,
             'name' => $name,
-            'security' => $securityNav,
+            'security' => $securityEffective,
             'security_raw' => $securityRaw,
-            'security_nav' => $securityNav,
-            'sec_class' => 'null',
+            'security_nav' => $securityEffective,
+            'sec_class' => $secClass,
             'near_constellation_boundary' => 0,
             'near_region_boundary' => 0,
             'legal_mask' => 0,
