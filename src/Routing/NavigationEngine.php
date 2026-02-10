@@ -1125,7 +1125,7 @@ final class NavigationEngine
                 continue;
             }
             $fromIsMidpoint = $from !== $startId && $from !== $endId;
-            if (!$this->isSystemAllowedForRoute($shipType, $this->systems[$from], $fromIsMidpoint, $options)) {
+            if (!$this->isSystemAllowedForJumpChain($shipType, $this->systems[$from], $fromIsMidpoint, $options)) {
                 $filtered++;
                 continue;
             }
@@ -1135,7 +1135,7 @@ final class NavigationEngine
                     continue;
                 }
                 $toIsMidpoint = $to !== $startId && $to !== $endId;
-                if (!$this->isSystemAllowedForRoute($shipType, $this->systems[$to], $toIsMidpoint, $options)) {
+                if (!$this->isSystemAllowedForJumpChain($shipType, $this->systems[$to], $toIsMidpoint, $options)) {
                     $filtered++;
                     $filteredForNode++;
                     continue;
@@ -1157,7 +1157,7 @@ final class NavigationEngine
         }
         foreach ([$startId, $endId] as $endpointId) {
             if (isset($this->systems[$endpointId])
-                && $this->isSystemAllowedForRoute($shipType, $this->systems[$endpointId], false, $options)
+                && $this->isSystemAllowedForJumpChain($shipType, $this->systems[$endpointId], false, $options)
                 && !isset($neighbors[$endpointId])
             ) {
                 $neighbors[$endpointId] = [];
@@ -1719,6 +1719,10 @@ final class NavigationEngine
 
     private function jumpFilterReason(string $shipType, array $system, bool $isMidpoint, array $options): ?string
     {
+        if ($this->isPochvenSystem($system)) {
+            return 'pochven';
+        }
+
         if (!$this->shipRules->isSystemAllowed($shipType, $system, $isMidpoint)) {
             $security = (float) ($system['security'] ?? 0.0);
             if ($security >= 0.5) {
@@ -1994,6 +1998,10 @@ final class NavigationEngine
 
     private function isSystemAllowedForJumpChain(string $shipType, array $system, bool $isMidpoint, array $options): bool
     {
+        if ($this->isPochvenSystem($system)) {
+            return false;
+        }
+
         $useNavSecurity = $this->isCapitalShipType($shipType);
         $security = $this->systemSecurityForNav($system, $useNavSecurity);
 
@@ -2024,6 +2032,20 @@ final class NavigationEngine
         }
 
         return true;
+    }
+
+    private function isPochvenSystem(array $system): bool
+    {
+        $spaceType = strtolower((string) ($system['space_type'] ?? $system['space'] ?? $system['region_type'] ?? ''));
+        if ($spaceType === 'pochven') {
+            return true;
+        }
+
+        if (!empty($system['is_pochven'])) {
+            return true;
+        }
+
+        return (int) ($system['region_id'] ?? 0) === 10000070;
     }
 
     /** @param array<int, mixed> $edges */
@@ -2333,10 +2355,15 @@ final class NavigationEngine
                 return false;
             }
             $isMidpoint = $index < count($segments) - 1;
-            if (!$this->shipRules->isSystemAllowed($shipType, $system, $isMidpoint)) {
+            $segmentType = (string) ($segment['type'] ?? 'gate');
+            if ($segmentType === 'jump') {
+                if (!$this->isSystemAllowedForJumpChain($shipType, $system, $isMidpoint, [])) {
+                    return false;
+                }
+            } elseif (!$this->shipRules->isSystemAllowed($shipType, $system, $isMidpoint)) {
                 return false;
             }
-            if (($segment['type'] ?? 'gate') === 'jump' && $effectiveRange !== null) {
+            if ($segmentType === 'jump' && $effectiveRange !== null) {
                 $distance = (float) ($segment['distance_ly'] ?? 0.0);
                 if ($distance > $effectiveRange + 0.0001) {
                     return false;
