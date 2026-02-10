@@ -87,6 +87,9 @@ final class ApiController
         $avoidNullsec = $this->validator->bool($body['avoid_nullsec'] ?? null, false);
         $defaultStrictness = ($avoidLowsec || $avoidNullsec) ? 'strict' : 'soft';
 
+        $preferNpc = $this->validator->bool($body['prefer_npc_stations'] ?? null, $mode === 'capital');
+        $npcDetourPolicy = $this->deriveNpcDetourPolicy($safety, $preferNpc);
+
         $options = [
             'from' => $from,
             'to' => $to,
@@ -104,7 +107,8 @@ final class ApiController
                 $defaultStrictness
             ),
             'avoid_systems' => isset($body['avoid_specific_systems']) ? $this->validator->list((string) $body['avoid_specific_systems']) : [],
-            'prefer_npc' => $this->validator->bool($body['prefer_npc_stations'] ?? null, $mode === 'capital'),
+            'prefer_npc' => $preferNpc,
+            'npc_fallback_max_extra_jumps' => $npcDetourPolicy['npc_detour_max_extra_jumps'],
             'ship_modifier' => $this->shipModifier($shipClass),
         ];
 
@@ -115,7 +119,38 @@ final class ApiController
         }
 
         $result['risk_updated_at'] = $this->risk->getLatestUpdate(Env::get('RISK_PROVIDER', 'esi_system_kills'));
+        $result['selected_policy'] = $npcDetourPolicy;
+        $result['explanation'][] = sprintf(
+            'NPC detour policy: %s side at %d%% (%s).',
+            $npcDetourPolicy['slider_side'],
+            $safety,
+            $npcDetourPolicy['npc_detour_note']
+        );
+        if (isset($result['debug']) && is_array($result['debug'])) {
+            $result['debug']['selected_policy'] = $npcDetourPolicy;
+        }
+
         return new JsonResponse($result);
+    }
+
+    /**
+     * @return array{slider_side: string, safety_vs_speed: int, prefer_npc_stations: bool, npc_detour_max_extra_jumps: int, npc_detour_note: string}
+     */
+    private function deriveNpcDetourPolicy(int $safetyVsSpeed, bool $preferNpcStations): array
+    {
+        $sliderSide = $safetyVsSpeed <= 50 ? 'speed' : 'safety';
+        $extraJumps = ($preferNpcStations && $sliderSide === 'safety') ? 1 : 0;
+        $note = $extraJumps > 0
+            ? 'may accept +1 jump detour for NPC coverage'
+            : 'no extra jump allowed for NPC coverage';
+
+        return [
+            'slider_side' => $sliderSide,
+            'safety_vs_speed' => $safetyVsSpeed,
+            'prefer_npc_stations' => $preferNpcStations,
+            'npc_detour_max_extra_jumps' => $extraJumps,
+            'npc_detour_note' => $note,
+        ];
     }
 
     public function systemSearch(Request $request): Response

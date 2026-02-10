@@ -160,4 +160,40 @@ if (!empty($softPayload['gate_route']['fallback_used'])) {
     throw new RuntimeException('Explicit soft strictness should not be marked as fallback_used.');
 }
 
+
+$detourSpeedBody = $baseBody;
+$detourSpeedBody['prefer_npc_stations'] = true;
+$detourSpeedBody['safety_vs_speed'] = 50;
+$speedRequest = new Request('POST', '/api/route', [], $detourSpeedBody, [], '127.0.0.1');
+$speedResponse = $controller->route($speedRequest);
+$speedPayload = json_decode($speedResponse->body, true);
+if (!is_array($speedPayload)) {
+    throw new RuntimeException('Expected JSON payload for speed-side detour policy request.');
+}
+if (($speedPayload['selected_policy']['slider_side'] ?? '') !== 'speed') {
+    throw new RuntimeException('safety_vs_speed=50 should map to speed side policy.');
+}
+if ((int) ($speedPayload['selected_policy']['npc_detour_max_extra_jumps'] ?? -1) !== 0) {
+    throw new RuntimeException('Speed side policy should not allow extra NPC detour jumps.');
+}
+
+$detourSafetyBody = $baseBody;
+$detourSafetyBody['prefer_npc_stations'] = true;
+$detourSafetyBody['safety_vs_speed'] = 51;
+$safetyRequest = new Request('POST', '/api/route', [], $detourSafetyBody, [], '127.0.0.1');
+$safetyResponse = $controller->route($safetyRequest);
+$safetyPayload = json_decode($safetyResponse->body, true);
+if (!is_array($safetyPayload)) {
+    throw new RuntimeException('Expected JSON payload for safety-side detour policy request.');
+}
+if (($safetyPayload['selected_policy']['slider_side'] ?? '') !== 'safety') {
+    throw new RuntimeException('safety_vs_speed=51 should map to safety side policy.');
+}
+if ((int) ($safetyPayload['selected_policy']['npc_detour_max_extra_jumps'] ?? -1) !== 1) {
+    throw new RuntimeException('Safety side policy should allow +1 NPC detour jump when prefer_npc_stations=true.');
+}
+if (!in_array('NPC detour policy: safety side at 51% (may accept +1 jump detour for NPC coverage).', (array) ($safetyPayload['explanation'] ?? []), true)) {
+    throw new RuntimeException('Explanation should include selected NPC detour policy details.');
+}
+
 echo "API strictness normalization test passed.\n";

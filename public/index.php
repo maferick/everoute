@@ -102,6 +102,9 @@ try {
             return;
         }
 
+        $safetyVsSpeed = max(0, min(100, (int) ($_POST['safety_vs_speed'] ?? 50)));
+        $preferNpcStations = !empty($_POST['prefer_npc_stations']);
+
         $payload = [
             'from' => $_POST['from_id'] ?? ($_POST['from'] ?? ''),
             'to' => $_POST['to_id'] ?? ($_POST['to'] ?? ''),
@@ -111,12 +114,12 @@ try {
             'ship_class' => $_POST['ship_class'] ?? 'subcap',
             'jump_ship_type' => $_POST['jump_ship_type'] ?? '',
             'jump_skill_level' => $_POST['jump_skill_level'] ?? '',
-            'safety_vs_speed' => (int) ($_POST['safety_vs_speed'] ?? 50),
+            'safety_vs_speed' => $safetyVsSpeed,
             'avoid_lowsec' => !empty($_POST['avoid_lowsec']),
             'avoid_nullsec' => !empty($_POST['avoid_nullsec']),
             'avoid_strictness' => $_POST['avoid_strictness'] ?? '',
             'avoid_specific_systems' => $_POST['avoid_specific_systems'] ?? '',
-            'prefer_npc_stations' => !empty($_POST['prefer_npc_stations']),
+            'prefer_npc_stations' => $preferNpcStations,
             'debug' => !empty($_POST['debug']),
         ];
         $apiRequest = new Request('POST', '/api/v1/route', [], $payload, [], $request->ip, $request->requestId);
