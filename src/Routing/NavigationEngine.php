@@ -100,6 +100,9 @@ final class NavigationEngine
         $hybridRoute = $this->applyRouteScoring($hybridRoute, $weights, $options);
 
         $selection = $this->selectBestWithMetadata($gateRoute, $jumpRoute, $hybridRoute, $options);
+        $gateRoute = $this->withRouteDiagnostics($gateRoute, 'gate', $weights, $selection);
+        $jumpRoute = $this->withRouteDiagnostics($jumpRoute, 'jump', $weights, $selection);
+        $hybridRoute = $this->withRouteDiagnostics($hybridRoute, 'hybrid', $weights, $selection);
         $best = (string) ($selection['best'] ?? 'none');
         $bestSelectionReason = (string) ($selection['reason'] ?? 'no_feasible_routes');
         $explanation = $this->buildExplanation($best, $gateRoute, $jumpRoute, $hybridRoute, $options, $bestSelectionReason);
@@ -125,6 +128,7 @@ final class NavigationEngine
             'explanation' => $explanation,
             'effective_range_ly' => $effectiveRange,
             'scoring' => $weights,
+            'weights_used' => $weights,
         ];
 
         if ($debugEnabled) {
@@ -153,6 +157,21 @@ final class NavigationEngine
                 'dominance_rule_applied' => !empty($selection['dominance_rule_applied']),
                 'extra_gate_penalty' => $selection['extra_gate_penalty'] ?? [],
                 'scoring' => $weights,
+                'weights_used' => $weights,
+                'route_dominance_flags' => [
+                    'gate' => [
+                        'selected_as_best' => $best === 'gate',
+                        'dominance_rule_winner' => $best === 'gate' && !empty($selection['dominance_rule_applied']),
+                    ],
+                    'jump' => [
+                        'selected_as_best' => $best === 'jump',
+                        'dominance_rule_winner' => $best === 'jump' && !empty($selection['dominance_rule_applied']),
+                    ],
+                    'hybrid' => [
+                        'selected_as_best' => $best === 'hybrid',
+                        'dominance_rule_winner' => $best === 'hybrid' && !empty($selection['dominance_rule_applied']),
+                    ],
+                ],
             ];
             if (isset($jumpRoute['debug']) && is_array($jumpRoute['debug'])) {
                 $payload['debug']['jump_origin'] = $jumpRoute['debug'];
@@ -2352,6 +2371,56 @@ final class NavigationEngine
             + ($route['preference_cost'] * (float) $weights['w_pref'])
             + (float) $route['npc_bonus'];
         $route['total_cost'] = round($weightedTotal, 4);
+
+        return $route;
+    }
+
+    private function withRouteDiagnostics(array $route, string $routeKey, array $weights, array $selection): array
+    {
+        $segments = $route['segments'] ?? [];
+        $jumpHops = 0;
+        if (is_array($segments)) {
+            foreach ($segments as $segment) {
+                if (($segment['type'] ?? 'gate') === 'jump') {
+                    $jumpHops++;
+                }
+            }
+        }
+
+        $gateTimeMinutes = (float) max(0, (int) ($route['total_gates'] ?? 0));
+        $jumpHandlingMinutes = (float) $jumpHops;
+        $mandatoryWaitMinutes = max(0.0, (float) ($route['total_wait_minutes'] ?? 0.0));
+
+        $extraGatePenalty = 0.0;
+        $selectionPenalty = max(0.0, (float) ($route['selection_penalty'] ?? 0.0));
+        $extraPenaltyRoutes = $selection['extra_gate_penalty']['penalty_routes'][$routeKey] ?? [];
+        if (is_array($extraPenaltyRoutes)) {
+            foreach ($extraPenaltyRoutes as $penaltyRow) {
+                $extraGatePenalty += max(0.0, (float) ($penaltyRow['penalty'] ?? 0.0));
+            }
+        }
+
+        $route['weights_used'] = [
+            'w_time' => (float) ($weights['w_time'] ?? 0.0),
+            'w_risk' => (float) ($weights['w_risk'] ?? 0.0),
+            'w_pref' => (float) ($weights['w_pref'] ?? 0.0),
+        ];
+        $route['gate_time_minutes'] = round($gateTimeMinutes, 2);
+        $route['jump_handling_minutes'] = round($jumpHandlingMinutes, 2);
+        $route['mandatory_wait_minutes'] = round($mandatoryWaitMinutes, 2);
+        $route['penalties_bonuses'] = [
+            'npc_bonus' => round((float) ($route['npc_bonus'] ?? 0.0), 4),
+            'selection_penalty' => round($selectionPenalty, 4),
+            'extra_gate_penalty' => round($extraGatePenalty, 4),
+            'cooldown_cap_penalty_minutes' => round((float) ($route['cooldown_cap_penalty_minutes'] ?? 0.0), 4),
+        ];
+        $route['dominance_flags'] = [
+            'selected_as_best' => (string) ($selection['best'] ?? 'none') === $routeKey,
+            'dominance_rule_applied' => !empty($selection['dominance_rule_applied']),
+            'dominance_rule_winner' => (string) ($selection['best'] ?? 'none') === $routeKey
+                && !empty($selection['dominance_rule_applied']),
+            'extra_gate_penalty_applied' => $extraGatePenalty > 0.0,
+        ];
 
         return $route;
     }
