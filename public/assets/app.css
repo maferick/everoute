@@ -10,7 +10,8 @@ body {
 }
 
 .page {
-    width: min(90vw, 1400px);
+    width: 100%;
+    max-width: min(95vw, 1800px);
     margin: 0 auto;
     padding: 36px 32px 56px;
 }
@@ -61,8 +62,9 @@ body {
 
 .layout {
     display: grid;
-    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-    gap: 24px;
+    grid-template-columns: minmax(380px, 460px) minmax(0, 1fr);
+    gap: 32px;
+    align-items: start;
 }
 
 .card {
@@ -76,10 +78,15 @@ body {
     position: sticky;
     top: 20px;
     align-self: start;
+    width: 100%;
+    min-width: 380px;
+    max-width: 460px;
 }
 
 .results-card {
     min-height: 320px;
+    width: 100%;
+    max-width: none;
 }
 
 .form-section {
@@ -205,7 +212,7 @@ button.loading .button-spinner {
 
 .route-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
     gap: 16px;
     margin-top: 16px;
 }
@@ -353,6 +360,7 @@ button.loading .button-spinner {
 
 .table-wrap {
     overflow-x: auto;
+    width: 100%;
 }
 
 .table-wrap table {
@@ -451,13 +459,32 @@ button.loading .button-spinner {
     font-size: 0.75rem;
 }
 
+@media (max-width: 1280px) {
+    .layout {
+        grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+        gap: 24px;
+    }
+
+    .planner-card {
+        min-width: 340px;
+        max-width: 420px;
+    }
+}
+
 @media (max-width: 960px) {
+    .page {
+        max-width: min(96vw, 1800px);
+        padding: 28px 20px 44px;
+    }
+
     .layout {
         grid-template-columns: 1fr;
     }
 
     .planner-card {
         position: static;
+        min-width: 0;
+        max-width: none;
     }
 
     .site-header {
