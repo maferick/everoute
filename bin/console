@@ -32,6 +32,7 @@ use Everoute\Cli\SdeCleanupCommand;
 use Everoute\Cli\SdeInstallCommand;
 use Everoute\Cli\SdeUpdateCommand;
 use Everoute\Cli\SeedChokepointsCommand;
+use Everoute\Cli\SecurityAuditCommand;
 use Everoute\Config\Env;
 use Symfony\Component\Console\Application;
 
@@ -69,4 +70,5 @@ $application->add(new SdeInstallCommand());
 $application->add(new SdeUpdateCommand());
 $application->add(new SdeCleanupCommand());
 $application->add(new DoctorCommand());
+$application->add(new SecurityAuditCommand());
 $application->run();
