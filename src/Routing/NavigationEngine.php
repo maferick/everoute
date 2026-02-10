@@ -273,13 +273,13 @@ final class NavigationEngine
                 }
                 if ($useSubcapPolicy) {
                     return $this->gateStepCost($preference, $profile)
-                        + $this->npcStationBonus($profile, $options)
+                        + $this->npcStationStepBonus($profile, $options)
                         + $this->avoidPenalty($profile, $options);
                 }
                 $riskScore = $profile['risk_penalty'];
                 return 1.0
                     + ($riskScore * $this->riskWeightCache)
-                    + $this->npcStationBonus($profile, $options)
+                    + $this->npcStationStepBonus($profile, $options)
                     + $this->avoidPenalty($profile, $options);
             },
             null,
@@ -440,6 +440,7 @@ final class NavigationEngine
                     + $fatigue
                     + $cooldown
                     + ($riskScore * $this->riskWeightCache)
+                    + $this->npcStationStepBonus($profile, $options)
                     + $this->avoidPenalty($profile, $options);
             },
             null,
@@ -680,7 +681,7 @@ final class NavigationEngine
                         return $distance
                             + $cooldown
                             + ($riskScore * $this->riskWeightCache)
-                            + $this->npcStationBonus($profile, $options)
+                            + $this->npcStationStepBonus($profile, $options)
                             + $this->avoidPenalty($profile, $options);
                     },
                     function (int $node) use ($shipType, $options): bool {
@@ -1034,22 +1035,47 @@ final class NavigationEngine
         return max(0.0, min(100.0, $penalty));
     }
 
-    private function npcStationBonus(array $profile, array $options): float
+    private function npcSafetyWeight(array $options): float
+    {
+        $safety = max(0, min(100, (int) ($options['safety_vs_speed'] ?? 50)));
+        $s = $safety / 100.0;
+
+        return 0.6 + (0.7 * $s);
+    }
+
+    private function npcStationStepBonus(array $profile, array $options): float
     {
         if (empty($options['prefer_npc'])) {
             return 0.0;
         }
 
-        $npcCount = $profile['npc_station_count'];
-        $hasNpcStation = $profile['has_npc_station'];
-
+        $npcCount = (int) ($profile['npc_station_count'] ?? 0);
+        $hasNpcStation = !empty($profile['has_npc_station']) || $npcCount > 0;
         if (!$hasNpcStation) {
             return 0.0;
         }
 
         $count = max(1, $npcCount);
-        $bonusMagnitude = min(0.5, 0.1 * $count);
-        return -$bonusMagnitude;
+        $weightedMagnitude = min(0.28, 0.06 * $count) * $this->npcSafetyWeight($options);
+        $stepCap = 0.18;
+
+        return -min($stepCap, $weightedMagnitude);
+    }
+
+    private function routeNpcBonus(array $route, array $options): float
+    {
+        if (empty($options['prefer_npc'])) {
+            return 0.0;
+        }
+
+        $npcCount = max(0, (int) ($route['npc_stations_in_route'] ?? 0));
+        $systemCount = max(1, count((array) ($route['systems'] ?? [])));
+        $coverage = min(1.0, $npcCount / $systemCount);
+
+        $weightedMagnitude = ((0.22 * $coverage) + (0.02 * min(10, $npcCount))) * $this->npcSafetyWeight($options);
+        $totalCap = 0.55;
+
+        return -min($totalCap, $weightedMagnitude);
     }
 
     /** @param array<int, array{id: int, security: float}> $systems */
@@ -1140,6 +1166,7 @@ final class NavigationEngine
         }
         $systems = is_array($route['systems'] ?? null) ? $route['systems'] : [];
         $route['space_types'] = $this->spaceTypesUsed($systems);
+        $route += $this->routeNpcMetrics($systems);
         return $route;
     }
 
@@ -1879,7 +1906,7 @@ final class NavigationEngine
                     $regionalGateScore = 0.5;
                 }
             }
-            $npcBonus = $this->npcStationBonus($system, $options);
+            $npcBonus = $this->npcStationStepBonus($system, $options);
             $estimatedJumpCooldown = $this->estimateJumpCooldownMinutes($shipType, $distance);
             $score = $hops
                 + $distance
@@ -2116,7 +2143,6 @@ final class NavigationEngine
         }
         $lowsecCount = 0;
         $nullsecCount = 0;
-        $npcStationsInRoute = 0;
         foreach ($systems as $system) {
             $security = (float) ($system['security'] ?? 0.0);
             if ($security >= 0.1 && $security < 0.5) {
@@ -2124,12 +2150,8 @@ final class NavigationEngine
             } elseif ($security < 0.1) {
                 $nullsecCount++;
             }
-            if (!empty($system['has_npc_station'])) {
-                $npcStationsInRoute++;
-            }
         }
-        $systemCount = count($systems);
-        $npcStationRatio = $systemCount > 0 ? round($npcStationsInRoute / $systemCount, 3) : 0.0;
+        $npcMetrics = $this->routeNpcMetrics($systems);
         return [
             'feasible' => true,
             'legacy_total_cost' => round($distance, 2),
@@ -2140,8 +2162,26 @@ final class NavigationEngine
             'systems' => $systems,
             'lowsec_count' => $lowsecCount,
             'nullsec_count' => $nullsecCount,
+            'npc_stations_in_route' => $npcMetrics['npc_stations_in_route'],
+            'npc_station_ratio' => $npcMetrics['npc_station_ratio'],
+        ];
+    }
+
+    /** @param array<int, array{has_npc_station?: bool|null}> $systems */
+    private function routeNpcMetrics(array $systems): array
+    {
+        $npcStationsInRoute = 0;
+        foreach ($systems as $system) {
+            if (!empty($system['has_npc_station'])) {
+                $npcStationsInRoute++;
+            }
+        }
+        $systemCount = count($systems);
+        $ratio = $systemCount > 0 ? ($npcStationsInRoute / $systemCount) : 0.0;
+
+        return [
             'npc_stations_in_route' => $npcStationsInRoute,
-            'npc_station_ratio' => $npcStationRatio,
+            'npc_station_ratio' => round(max(0.0, min(1.0, $ratio)), 3),
         ];
     }
 
@@ -2300,6 +2340,7 @@ final class NavigationEngine
         $route['time_cost'] = $this->routeTimeCost($route);
         $route['risk_cost'] = $this->routeRiskCost($route);
         $route['preference_cost'] = $this->routePreferenceCost($route, $options);
+        $route['npc_bonus'] = $this->routeNpcBonus($route, $options);
 
         if (empty($route['feasible'])) {
             $route['total_cost'] = INF;
@@ -2308,7 +2349,8 @@ final class NavigationEngine
 
         $weightedTotal = ($route['time_cost'] * (float) $weights['w_time'])
             + ($route['risk_cost'] * (float) $weights['w_risk'])
-            + ($route['preference_cost'] * (float) $weights['w_pref']);
+            + ($route['preference_cost'] * (float) $weights['w_pref'])
+            + (float) $route['npc_bonus'];
         $route['total_cost'] = round($weightedTotal, 4);
 
         return $route;
@@ -2516,9 +2558,7 @@ final class NavigationEngine
         }
         if (!empty($options['prefer_npc'])) {
             $npcCount = (int) ($selected['npc_stations_in_route'] ?? 0);
-            if ($npcCount > 0) {
-                $reasons[] = sprintf('Selected %d systems with NPC stations (toggle enabled).', $npcCount);
-            }
+            $reasons[] = sprintf('Selected %d systems with NPC stations (toggle enabled).', $npcCount);
         }
         return $reasons;
     }
