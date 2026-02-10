@@ -56,6 +56,9 @@ $pdo->exec('CREATE TABLE stargates (id INTEGER PRIMARY KEY AUTOINCREMENT, from_s
 $pdo->exec('CREATE TABLE constellation_portals (constellation_id INTEGER, system_id INTEGER, has_region_boundary INTEGER, PRIMARY KEY (constellation_id, system_id))');
 $pdo->exec('CREATE TABLE constellation_edges (from_constellation_id INTEGER, to_constellation_id INTEGER, from_system_id INTEGER, to_system_id INTEGER, is_region_boundary INTEGER, PRIMARY KEY (from_constellation_id, to_constellation_id, from_system_id, to_system_id))');
 $pdo->exec('CREATE TABLE constellation_dist (constellation_id INTEGER, portal_system_id INTEGER, system_id INTEGER, gate_dist INTEGER, PRIMARY KEY (constellation_id, portal_system_id, system_id))');
+$pdo->exec('CREATE TABLE jump_constellation_portals (constellation_id INTEGER, range_ly INTEGER, system_id INTEGER, outbound_constellations_count INTEGER, PRIMARY KEY (constellation_id, range_ly, system_id))');
+$pdo->exec('CREATE TABLE jump_constellation_edges (range_ly INTEGER, from_constellation_id INTEGER, to_constellation_id INTEGER, example_from_system_id INTEGER, example_to_system_id INTEGER, min_hop_ly REAL, PRIMARY KEY (range_ly, from_constellation_id, to_constellation_id))');
+$pdo->exec('CREATE TABLE jump_midpoint_candidates (constellation_id INTEGER, range_ly INTEGER, system_id INTEGER, score REAL, PRIMARY KEY (constellation_id, range_ly, system_id))');
 $pdo->exec('CREATE TABLE system_risk (system_id INTEGER, ship_kills_1h INTEGER, pod_kills_1h INTEGER, npc_kills_1h INTEGER, updated_at TEXT, risk_updated_at TEXT, kills_last_1h INTEGER, kills_last_24h INTEGER, pod_kills_last_1h INTEGER, pod_kills_last_24h INTEGER, last_updated_at TEXT)');
 $pdo->exec('CREATE TABLE jump_neighbors (system_id INTEGER, range_ly INTEGER, neighbor_count INTEGER, neighbor_ids_blob BLOB, encoding_version INTEGER, updated_at TEXT)');
 $pdo->exec('CREATE TABLE static_meta (id INTEGER PRIMARY KEY, active_sde_build_number INTEGER, precompute_version INTEGER, built_at TEXT, active_build_id TEXT)');
@@ -102,6 +105,28 @@ $pdo->exec("INSERT INTO constellation_dist VALUES
     (10, 3, 4, 2),
     (10, 3, 5, 1),
     (70, 6, 6, 0)");
+
+$pdo->exec("INSERT INTO jump_constellation_edges VALUES
+    (7, 10, 70, 3, 6, 6.0),
+    (7, 70, 10, 6, 3, 6.0),
+    (10, 10, 70, 3, 6, 6.0),
+    (10, 70, 10, 6, 3, 6.0)");
+$pdo->exec("INSERT INTO jump_constellation_portals VALUES
+    (10, 7, 3, 1),
+    (70, 7, 6, 1),
+    (10, 10, 1, 1),
+    (10, 10, 2, 1),
+    (10, 10, 3, 1),
+    (10, 10, 4, 1),
+    (10, 10, 5, 1),
+    (70, 10, 6, 1)");
+$pdo->exec("INSERT INTO jump_midpoint_candidates VALUES
+    (10, 7, 2, 3.0),
+    (10, 7, 3, 4.0),
+    (70, 7, 6, 1.0),
+    (10, 10, 2, 3.0),
+    (10, 10, 3, 4.0),
+    (70, 10, 6, 1.0)");
 
 
 function packNeighbors(array $neighborIds): string
@@ -245,6 +270,29 @@ if (empty($flatGate['feasible'])) {
 }
 if ((int) ($hierGate['nodes_explored'] ?? 0) >= (int) ($flatGate['nodes_explored'] ?? PHP_INT_MAX)) {
     throw new RuntimeException('Hierarchical route should explore fewer nodes than flat route.');
+}
+
+
+$jumpWithHierarchy = $resultCarrier['jump_route'] ?? [];
+$hybridWithHierarchy = $resultCarrier['hybrid_route'] ?? [];
+$pdo->exec('DELETE FROM jump_constellation_portals');
+$pdo->exec('DELETE FROM jump_constellation_edges');
+$pdo->exec('DELETE FROM jump_midpoint_candidates');
+$engine->refresh();
+$flatJumpResult = $engine->compute($optionsCarrier);
+$jumpWithoutHierarchy = $flatJumpResult['jump_route'] ?? [];
+$hybridWithoutHierarchy = $flatJumpResult['hybrid_route'] ?? [];
+if (empty($jumpWithoutHierarchy['feasible'])) {
+    throw new RuntimeException('Expected jump route to stay feasible without jump-constellation hierarchy.');
+}
+if (!empty($hybridWithHierarchy['feasible']) && empty($hybridWithoutHierarchy['feasible'])) {
+    throw new RuntimeException('Hybrid route feasibility should be preserved when hierarchy data is removed.');
+}
+if ((int) ($jumpWithHierarchy['nodes_explored'] ?? PHP_INT_MAX) > (int) ($jumpWithoutHierarchy['nodes_explored'] ?? 0)) {
+    throw new RuntimeException('Jump hierarchy should not explore more nodes than flat jump search.');
+}
+if ((int) ($hybridWithHierarchy['nodes_explored'] ?? PHP_INT_MAX) > (int) ($hybridWithoutHierarchy['nodes_explored'] ?? 0)) {
+    throw new RuntimeException('Hybrid hierarchy should not explore more nodes than flat hybrid search.');
 }
 
 echo "Navigation engine cases passed.\n";

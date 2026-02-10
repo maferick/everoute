@@ -21,9 +21,13 @@ if (file_exists($autoload)) {
     require_once __DIR__ . '/../src/Routing/JumpFatigueModel.php';
     require_once __DIR__ . '/../src/Routing/JumpMath.php';
     require_once __DIR__ . '/../src/Routing/JumpPlanner.php';
+    require_once __DIR__ . '/../src/Routing/JumpNeighborGraphBuilder.php';
+    require_once __DIR__ . '/../src/Routing/AStar.php';
+    require_once __DIR__ . '/../src/Routing/JumpShipType.php';
     require_once __DIR__ . '/../src/Routing/JumpRangeCalculator.php';
     require_once __DIR__ . '/../src/Routing/MovementRules.php';
     require_once __DIR__ . '/../src/Routing/WeightCalculator.php';
+    require_once __DIR__ . '/../src/Risk/RiskScorer.php';
     require_once __DIR__ . '/../src/Security/Logger.php';
     require_once __DIR__ . '/../src/Universe/SystemRepository.php';
 }
@@ -35,7 +39,7 @@ if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
 
 $connection = new Connection('sqlite::memory:', '', '');
 $pdo = $connection->pdo();
-$pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, security_raw REAL, security_nav REAL, region_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
+$pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, security_raw REAL, security_nav REAL, region_id INTEGER, constellation_id INTEGER DEFAULT 1, is_wormhole INTEGER DEFAULT 0, is_normal_universe INTEGER DEFAULT 1, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
 
 $metersPerLy = JumpMath::METERS_PER_LY;
 $systemsData = [
@@ -44,7 +48,7 @@ $systemsData = [
     [3, 'Mid-2', 0.2, 0.2, 0.2, 1, 0, 0, 1.0, 16 * $metersPerLy, 0.0, 0.0],
     [4, 'End', 0.2, 0.2, 0.2, 1, 1, 1, 1.0, 24 * $metersPerLy, 0.0, 0.0],
 ];
-$stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+$stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, 1, 0, 1, ?, ?, ?, ?, ?, ?)');
 foreach ($systemsData as $row) {
     $stmt->execute($row);
 }
