@@ -16,6 +16,7 @@ use Everoute\Routing\SystemLookup;
 use Everoute\Security\Logger;
 use Everoute\Universe\JumpNeighborRepository;
 use Everoute\Universe\StargateRepository;
+use Everoute\Universe\StaticMetaRepository;
 use Everoute\Universe\SystemRepository;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -44,11 +45,12 @@ final class CacheWarmCommand extends Command
 
         $logger = new Logger();
         $systems = new SystemRepository($connection);
+        $riskRepository = new RiskRepository($connection, $riskCache, $riskCacheTtl, $heatmapTtl);
         $engine = new NavigationEngine(
             $systems,
             new StargateRepository($connection),
             new JumpNeighborRepository($connection, $logger),
-            new RiskRepository($connection, $riskCache, $riskCacheTtl, $heatmapTtl),
+            $riskRepository,
             new JumpRangeCalculator(__DIR__ . '/../../config/ships.php', __DIR__ . '/../../config/jump_ranges.php'),
             new JumpFatigueModel(),
             new ShipRules(),
@@ -59,7 +61,9 @@ final class CacheWarmCommand extends Command
             $engine,
             $logger,
             $riskCache,
-            $routeCacheTtl
+            $routeCacheTtl,
+            new StaticMetaRepository($connection),
+            $riskRepository
         );
         $service->refresh();
         $output->writeln('<info>Cache warmed.</info>');

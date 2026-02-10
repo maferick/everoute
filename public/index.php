@@ -22,6 +22,7 @@ use Everoute\Security\Logger;
 use Everoute\Security\RateLimiter;
 use Everoute\Security\Validator;
 use Everoute\Universe\JumpNeighborRepository;
+use Everoute\Universe\StaticMetaRepository;
 use Everoute\Universe\StargateRepository;
 use Everoute\Universe\SystemRepository;
 
@@ -70,7 +71,9 @@ $routeService = new RouteService(
     $engine,
     $logger,
     $riskCache,
-    $routeCacheTtl
+    $routeCacheTtl,
+    new StaticMetaRepository($connection),
+    $riskRepo
 );
 
 $validator = new Validator();
