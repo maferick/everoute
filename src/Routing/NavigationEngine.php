@@ -441,31 +441,24 @@ final class NavigationEngine
 
         $dijkstra = new Dijkstra();
         $this->riskWeightCache = $this->riskWeight($options);
-        $result = $dijkstra->shortestPath(
-            $graph['neighbors'],
-            $startId,
-            $endId,
-            function (int $from, int $to, mixed $edgeData) use ($options, $shipType): float {
-                $profile = $this->baseCostProfiles[$to] ?? null;
-                if ($profile === null) {
-                    return INF;
-                }
-                $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
-                $metrics = $this->fatigueModel->lookupHopMetricsForShipType($shipType, $distance);
-                $fatigue = $metrics['jump_fatigue_minutes'];
-                $cooldown = $metrics['jump_activation_minutes'];
-                $riskScore = $profile['risk_penalty'];
-                return $distance
-                    + $fatigue
-                    + $cooldown
-                    + ($riskScore * $this->riskWeightCache)
-                    + $this->npcStationStepBonus($profile, $options)
-                    + $this->avoidPenalty($profile, $options);
-            },
-            null,
-            null,
-            50000
-        );
+        $costFn = function (int $from, int $to, mixed $edgeData) use ($options, $shipType): float {
+            $profile = $this->baseCostProfiles[$to] ?? null;
+            if ($profile === null) {
+                return INF;
+            }
+            $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
+            $metrics = $this->fatigueModel->lookupHopMetricsForShipType($shipType, $distance);
+            $fatigue = $metrics['jump_fatigue_minutes'];
+            $cooldown = $metrics['jump_activation_minutes'];
+            $riskScore = $profile['risk_penalty'];
+            return $distance
+                + $fatigue
+                + $cooldown
+                + ($riskScore * $this->riskWeightCache)
+                + $this->npcStationStepBonus($profile, $options)
+                + $this->avoidPenalty($profile, $options);
+        };
+        $result = $dijkstra->shortestPath($graph['neighbors'], $startId, $endId, $costFn, null, null, 50000);
 
         if ($result['path'] === [] || ($result['path'][count($result['path']) - 1] ?? null) !== $endId) {
             if ($debugLogs) {
@@ -494,13 +487,207 @@ final class NavigationEngine
             ];
         }
 
-        $summary = $this->summarizeRoute($segments, $result['distance']);
-        $summary['nodes_explored'] = $result['nodes_explored'];
-        $summary['illegal_systems_filtered'] = $graph['filtered'];
+        $summary = $this->buildJumpRouteSummary($segments, (float) $result['distance'], (int) $result['nodes_explored'], (int) $graph['filtered'], $options);
+
+        $npcFallbackDebug = [
+            'triggered' => false,
+            'reason' => 'not_needed',
+            'baseline_npc_coverage' => (float) ($summary['npc_station_ratio'] ?? 0.0),
+        ];
+        if (!empty($options['prefer_npc'])) {
+            $coverage = (float) ($summary['npc_station_ratio'] ?? 0.0);
+            $coverageThreshold = $this->npcFallbackCoverageThreshold($options);
+            if ($coverage < $coverageThreshold) {
+                $budget = $this->npcFallbackBudget($options);
+                $npcFallbackDebug = [
+                    'triggered' => true,
+                    'reason' => 'low_npc_coverage',
+                    'baseline_npc_coverage' => round($coverage, 3),
+                    'required_npc_coverage' => round($coverageThreshold, 3),
+                    'budget' => $budget,
+                ];
+                $detour = $this->attemptJumpNpcFallbackDetour(
+                    $dijkstra,
+                    $graph['neighbors'],
+                    $startId,
+                    $endId,
+                    $shipType,
+                    $effectiveRange,
+                    $summary,
+                    $costFn,
+                    $budget,
+                    $options,
+                    $npcFallbackDebug
+                );
+                if ($detour !== null) {
+                    $summary = $detour;
+                    $npcFallbackDebug['accepted'] = true;
+                }
+            }
+        }
+
+        $summary['debug'] = $originDiagnostics;
+        $summary['debug']['npc_fallback'] = $npcFallbackDebug;
+        return $summary;
+    }
+
+    private function buildJumpRouteSummary(array $segments, float $distance, int $nodesExplored, int $filtered, array $options): array
+    {
+        $summary = $this->summarizeRoute($segments, $distance);
+        $summary['nodes_explored'] = $nodesExplored;
+        $summary['illegal_systems_filtered'] = $filtered;
         $summary['fatigue'] = $this->fatigueModel->evaluate($this->jumpSegments($segments), $options);
         $summary += $this->buildJumpWaitDetails($segments, $options);
-        $summary['debug'] = $originDiagnostics;
         return $summary;
+    }
+
+    private function npcFallbackCoverageThreshold(array $options): float
+    {
+        return max(0.0, min(1.0, (float) ($options['npc_fallback_min_coverage'] ?? 0.35)));
+    }
+
+    /** @return array{max_extra_jumps: int, max_extra_ly: float, max_relative_time_increase: float} */
+    private function npcFallbackBudget(array $options): array
+    {
+        $safety = max(0, min(100, (int) ($options['safety_vs_speed'] ?? 50)));
+        $defaultExtraLy = $safety >= 65 ? 8.0 : 0.0;
+        $defaultRelative = $safety >= 65 ? 0.18 : 0.0;
+
+        return [
+            'max_extra_jumps' => max(0, (int) ($options['npc_fallback_max_extra_jumps'] ?? $this->npcDetourHopBudget($options))),
+            'max_extra_ly' => max(0.0, (float) ($options['npc_fallback_max_extra_ly'] ?? $defaultExtraLy)),
+            'max_relative_time_increase' => max(0.0, (float) ($options['npc_fallback_max_relative_time_increase'] ?? $defaultRelative)),
+        ];
+    }
+
+    /**
+     * @param array<int, array<int, array{to: int, type: string, distance_ly: float}>> $neighbors
+     * @param callable(int,int,mixed):float $costFn
+     * @param array{max_extra_jumps: int, max_extra_ly: float, max_relative_time_increase: float} $budget
+     * @param array<string, mixed> $debug
+     */
+    private function attemptJumpNpcFallbackDetour(
+        Dijkstra $dijkstra,
+        array $neighbors,
+        int $startId,
+        int $endId,
+        string $shipType,
+        ?float $effectiveRange,
+        array $baseline,
+        callable $costFn,
+        array $budget,
+        array $options,
+        array &$debug
+    ): ?array {
+        if (($budget['max_extra_jumps'] ?? 0) < 1) {
+            $debug['reason'] = 'budget_disallows_extra_jumps';
+            return null;
+        }
+
+        $candidateIds = $this->npcFallbackCandidates($baseline, $neighbors, $startId, $endId);
+        if ($candidateIds === []) {
+            $debug['reason'] = 'no_npc_candidates';
+            return null;
+        }
+
+        $baselineHops = count((array) ($baseline['segments'] ?? []));
+        $baselineLy = (float) ($baseline['total_jump_ly'] ?? 0.0);
+        $baselineTime = $this->estimateJumpRouteTime((array) ($baseline['segments'] ?? []), (float) ($baseline['total_wait_minutes'] ?? 0.0));
+
+        foreach ($candidateIds as $candidateId) {
+            $first = $dijkstra->shortestPath($neighbors, $startId, $candidateId, $costFn, null, null, 50000);
+            $second = $dijkstra->shortestPath($neighbors, $candidateId, $endId, $costFn, null, null, 50000);
+            if (($first['path'] ?? []) === [] || ($second['path'] ?? []) === []) {
+                continue;
+            }
+
+            $pathA = (array) $first['path'];
+            $pathB = (array) $second['path'];
+            $path = array_merge($pathA, array_slice($pathB, 1));
+            $edges = array_merge((array) $first['edges'], (array) $second['edges']);
+            $segments = $this->buildSegments($path, $edges, $shipType);
+            if (!$this->validateRoute($segments, $shipType, $effectiveRange)) {
+                continue;
+            }
+
+            $detour = $this->buildJumpRouteSummary(
+                $segments,
+                (float) $first['distance'] + (float) $second['distance'],
+                (int) $first['nodes_explored'] + (int) $second['nodes_explored'],
+                (int) ($baseline['illegal_systems_filtered'] ?? 0),
+                $options
+            );
+
+            $extraHops = count($segments) - $baselineHops;
+            $extraLy = (float) ($detour['total_jump_ly'] ?? 0.0) - $baselineLy;
+            $detourTime = $this->estimateJumpRouteTime($segments, (float) ($detour['total_wait_minutes'] ?? 0.0));
+            $relativeTimeIncrease = $baselineTime > 0.0 ? (($detourTime - $baselineTime) / $baselineTime) : 0.0;
+
+            if ($extraHops > (int) $budget['max_extra_jumps']) {
+                continue;
+            }
+            if ($extraLy > (float) $budget['max_extra_ly'] && $relativeTimeIncrease > (float) $budget['max_relative_time_increase']) {
+                continue;
+            }
+
+            $debug['accepted_candidate'] = [
+                'system_id' => $candidateId,
+                'system_name' => $this->systems[$candidateId]['name'] ?? (string) $candidateId,
+                'extra_jumps' => $extraHops,
+                'extra_ly' => round($extraLy, 2),
+                'relative_time_increase' => round($relativeTimeIncrease, 3),
+            ];
+            $detour['npc_fallback_used'] = true;
+            return $detour;
+        }
+
+        $debug['reason'] = 'no_candidate_within_budget';
+        return null;
+    }
+
+    /**
+     * @param array<int, array<int, array{to: int, type: string, distance_ly: float}>> $neighbors
+     * @return int[]
+     */
+    private function npcFallbackCandidates(array $baseline, array $neighbors, int $startId, int $endId): array
+    {
+        $baselineSystems = array_values(array_map(
+            static fn (array $system): int => (int) ($system['id'] ?? 0),
+            (array) ($baseline['systems'] ?? [])
+        ));
+        $midpointId = $baselineSystems !== []
+            ? (int) $baselineSystems[(int) floor((count($baselineSystems) - 1) / 2)]
+            : $startId;
+        $midpoint = $this->systems[$midpointId] ?? $this->systems[$startId] ?? null;
+        if ($midpoint === null) {
+            return [];
+        }
+
+        $candidates = [];
+        foreach ($this->systems as $systemId => $system) {
+            if ($systemId === $startId || $systemId === $endId || $systemId === $midpointId) {
+                continue;
+            }
+            if (empty($system['has_npc_station']) && ((int) ($system['npc_station_count'] ?? 0) < 1)) {
+                continue;
+            }
+            if (!isset($neighbors[$systemId])) {
+                continue;
+            }
+            $candidates[$systemId] = JumpMath::distanceLy($midpoint, $system);
+        }
+        asort($candidates);
+        return array_slice(array_map('intval', array_keys($candidates)), 0, 12);
+    }
+
+    private function estimateJumpRouteTime(array $segments, float $waitMinutes): float
+    {
+        $distanceLy = 0.0;
+        foreach ($segments as $segment) {
+            $distanceLy += (float) ($segment['distance_ly'] ?? 0.0);
+        }
+
+        return $distanceLy + max(0.0, $waitMinutes) + count($segments);
     }
 
     private function computeHybridRoute(
