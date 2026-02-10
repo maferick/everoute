@@ -19,6 +19,8 @@ final class RouteRequest
         public readonly array $avoidSystems,
         public readonly bool $preferNpc,
         public readonly int $npcFallbackMaxExtraJumps,
+        public readonly bool $allowGateReposition,
+        public readonly int $hybridGateBudgetMax,
         public readonly bool $debug = false
     ) {
     }
@@ -35,6 +37,8 @@ final class RouteRequest
         ?string $avoidStrictness,
         array $avoidSystems,
         bool $preferNpc,
+        ?bool $allowGateReposition = null,
+        ?int $hybridGateBudgetMax = null,
         bool $debug = false
     ): self {
         $resolvedStrictness = self::resolveAvoidStrictness($avoidStrictness, $avoidLowsec, $avoidNullsec);
@@ -52,6 +56,8 @@ final class RouteRequest
             self::normalizeAvoidSystems($avoidSystems),
             $preferNpc,
             $npcPolicy['npc_detour_max_extra_jumps'],
+            $allowGateReposition ?? true,
+            max(2, min(12, (int) ($hybridGateBudgetMax ?? 8))),
             $debug
         );
     }
@@ -83,6 +89,8 @@ final class RouteRequest
             isset($options['avoid_strictness']) ? (string) $options['avoid_strictness'] : null,
             isset($options['avoid_systems']) && is_array($options['avoid_systems']) ? $options['avoid_systems'] : [],
             (bool) ($options['prefer_npc'] ?? ($ship->mode === 'capital')),
+            array_key_exists('allow_gate_reposition', $options) ? (bool) $options['allow_gate_reposition'] : true,
+            array_key_exists('hybrid_gate_budget_max', $options) && is_numeric($options['hybrid_gate_budget_max']) ? (int) $options['hybrid_gate_budget_max'] : 8,
             !empty($options['debug'])
         );
     }
@@ -105,6 +113,8 @@ final class RouteRequest
             'avoid_systems' => $this->avoidSystems,
             'prefer_npc' => $this->preferNpc,
             'npc_fallback_max_extra_jumps' => $this->npcFallbackMaxExtraJumps,
+            'allow_gate_reposition' => $this->allowGateReposition,
+            'hybrid_gate_budget_max' => $this->hybridGateBudgetMax,
             'ship_modifier' => $this->ship->shipModifier,
             'fuel_per_ly_factor' => $this->ship->fuelPerLyFactor,
             'jump_fuel_weight' => $this->ship->jumpFuelWeight,

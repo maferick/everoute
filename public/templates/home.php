@@ -223,6 +223,15 @@ if (!empty($engineRoutes['Gate']['segments'])) {
                         <label class="toggle"><input type="checkbox" name="prefer_npc_stations" <?= !empty($_POST['prefer_npc_stations']) ? 'checked' : '' ?>> Prefer NPC stations (policy follows slider)</label>
                         <label class="toggle"><input type="checkbox" name="debug" <?= !empty($_POST['debug']) ? 'checked' : '' ?>> Debug</label>
                     </div>
+
+                    <div class="grid two-col">
+                        <label class="toggle"><input type="checkbox" name="allow_gate_reposition" <?= !array_key_exists('allow_gate_reposition', $_POST) || !empty($_POST['allow_gate_reposition']) ? 'checked' : '' ?>> Allow gate reposition before first jump</label>
+                        <label>
+                            Hybrid gate budget (max gates)
+                            <input type="number" name="hybrid_gate_budget_max" min="2" max="12" value="<?= htmlspecialchars((string) ($_POST['hybrid_gate_budget_max'] ?? 8), ENT_QUOTES) ?>">
+                        </label>
+                    </div>
+
                     <label>
                         Avoid strictness
                         <select name="avoid_strictness">
