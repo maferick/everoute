@@ -1062,6 +1062,25 @@ final class NavigationEngine
         return 0.6 + (0.7 * $s);
     }
 
+    private function npcDetourHopBudget(array $options): int
+    {
+        if (empty($options['prefer_npc'])) {
+            return 0;
+        }
+
+        $safety = max(0, min(100, (int) ($options['safety_vs_speed'] ?? 50)));
+        return $safety >= 65 ? 1 : 0;
+    }
+
+    private function npcDetourBonusMultiplier(array $options): float
+    {
+        if (empty($options['prefer_npc'])) {
+            return 1.0;
+        }
+
+        return $this->npcDetourHopBudget($options) > 0 ? 1.55 : 1.0;
+    }
+
     private function npcStationStepBonus(array $profile, array $options): float
     {
         if (empty($options['prefer_npc'])) {
@@ -1091,8 +1110,11 @@ final class NavigationEngine
         $systemCount = max(1, count((array) ($route['systems'] ?? [])));
         $coverage = min(1.0, $npcCount / $systemCount);
 
-        $weightedMagnitude = ((0.22 * $coverage) + (0.02 * min(10, $npcCount))) * $this->npcSafetyWeight($options);
-        $totalCap = 0.55;
+        $multiplier = $this->npcDetourBonusMultiplier($options);
+        $weightedMagnitude = ((0.22 * $coverage) + (0.02 * min(10, $npcCount)))
+            * $this->npcSafetyWeight($options)
+            * $multiplier;
+        $totalCap = $this->npcDetourHopBudget($options) > 0 ? 0.8 : 0.55;
 
         return -min($totalCap, $weightedMagnitude);
     }
@@ -2533,6 +2555,39 @@ final class NavigationEngine
             'similar_time_threshold' => 0.1,
             'min_extra_gates' => 2,
         ];
+
+        if (!empty($options['prefer_npc']) && count($feasible) > 1) {
+            $detourBudget = $this->npcDetourHopBudget($options);
+            $minGates = INF;
+            foreach ($feasible as $route) {
+                $minGates = min($minGates, max(0, (int) ($route['total_gates'] ?? 0)));
+            }
+            foreach ($feasible as $routeKey => $route) {
+                $routeGates = max(0, (int) ($route['total_gates'] ?? 0));
+                $gateDelta = $routeGates - (int) $minGates;
+                if ($gateDelta <= $detourBudget) {
+                    continue;
+                }
+
+                $overBudget = $gateDelta - $detourBudget;
+                $penalty = round(min(0.6, 0.5 * $overBudget), 4);
+                if ($penalty <= 0.0) {
+                    continue;
+                }
+
+                $existingPenalty = (float) ($feasible[$routeKey]['selection_penalty'] ?? 0.0);
+                $feasible[$routeKey]['selection_penalty'] = round($existingPenalty + $penalty, 4);
+                $feasible[$routeKey]['total_cost'] = round(((float) ($feasible[$routeKey]['total_cost'] ?? INF)) + $penalty, 4);
+                $extraGatePenalty['applied'] = true;
+                $extraGatePenalty['penalty_routes'][$routeKey][] = [
+                    'vs_route' => 'detour_budget',
+                    'gate_delta' => $gateDelta,
+                    'time_delta' => 0.0,
+                    'penalty' => $penalty,
+                    'detour_budget' => $detourBudget,
+                ];
+            }
+        }
 
         if ($safetyVsSpeed <= 25 && count($feasible) > 1) {
             $timeSimilarityThreshold = (float) $extraGatePenalty['similar_time_threshold'];
