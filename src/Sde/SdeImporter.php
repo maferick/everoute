@@ -45,13 +45,13 @@ final class SdeImporter
                 $pdo,
                 'systems',
                 'systems_stage',
-                ['id', 'name', 'security', 'security_raw', 'security_nav', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at']
+                ['id', 'name', 'security', 'security_raw', 'security_nav', 'sec_class', 'near_constellation_boundary', 'near_region_boundary', 'legal_mask', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at']
             );
             $this->insertFromStage(
                 $pdo,
                 'stargates',
                 'stargates_stage',
-                ['id', 'from_system_id', 'to_system_id', 'updated_at']
+                ['id', 'from_system_id', 'to_system_id', 'is_regional_gate', 'is_constellation_boundary', 'is_region_boundary', 'updated_at']
             );
             $this->insertFromStage(
                 $pdo,
@@ -81,6 +81,10 @@ final class SdeImporter
             security DECIMAL(4,2) NOT NULL,
             security_raw DECIMAL(4,2) NOT NULL,
             security_nav DECIMAL(4,2) NOT NULL,
+            sec_class VARCHAR(16) NOT NULL DEFAULT \'null\',
+            near_constellation_boundary TINYINT(1) NOT NULL DEFAULT 0,
+            near_region_boundary TINYINT(1) NOT NULL DEFAULT 0,
+            legal_mask BIGINT UNSIGNED NOT NULL DEFAULT 0,
             region_id BIGINT NULL,
             constellation_id BIGINT NULL,
             is_wormhole TINYINT(1) NOT NULL DEFAULT 0,
@@ -99,6 +103,8 @@ final class SdeImporter
             from_system_id BIGINT NOT NULL,
             to_system_id BIGINT NOT NULL,
             is_regional_gate TINYINT(1) NOT NULL DEFAULT 0,
+            is_constellation_boundary TINYINT(1) NOT NULL DEFAULT 0,
+            is_region_boundary TINYINT(1) NOT NULL DEFAULT 0,
             INDEX idx_from_system (from_system_id),
             INDEX idx_to_system (to_system_id),
             updated_at DATETIME NOT NULL
@@ -122,6 +128,10 @@ final class SdeImporter
             security DECIMAL(4,2) NOT NULL,
             security_raw DECIMAL(4,2) NOT NULL,
             security_nav DECIMAL(4,2) NOT NULL,
+            sec_class VARCHAR(16) NOT NULL DEFAULT \'null\',
+            near_constellation_boundary TINYINT(1) NOT NULL DEFAULT 0,
+            near_region_boundary TINYINT(1) NOT NULL DEFAULT 0,
+            legal_mask BIGINT UNSIGNED NOT NULL DEFAULT 0,
             region_id BIGINT NULL,
             constellation_id BIGINT NULL,
             is_wormhole TINYINT(1) NOT NULL DEFAULT 0,
@@ -140,10 +150,14 @@ final class SdeImporter
             from_system_id BIGINT NOT NULL,
             to_system_id BIGINT NOT NULL,
             is_regional_gate TINYINT(1) NOT NULL DEFAULT 0,
+            is_constellation_boundary TINYINT(1) NOT NULL DEFAULT 0,
+            is_region_boundary TINYINT(1) NOT NULL DEFAULT 0,
             updated_at DATETIME NOT NULL,
             INDEX idx_from_system (from_system_id),
             INDEX idx_to_system (to_system_id),
             INDEX idx_regional_gate (is_regional_gate),
+            INDEX idx_constellation_boundary (is_constellation_boundary),
+            INDEX idx_region_boundary (is_region_boundary),
             CONSTRAINT fk_stargate_from FOREIGN KEY (from_system_id) REFERENCES systems (id) ON DELETE CASCADE,
             CONSTRAINT fk_stargate_to FOREIGN KEY (to_system_id) REFERENCES systems (id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
@@ -174,11 +188,23 @@ final class SdeImporter
         $this->ensureStationColumn($pdo, 'is_npc', 'TINYINT(1) NOT NULL DEFAULT 1');
         $this->ensureStationColumn($pdo, 'updated_at', 'DATETIME NOT NULL');
         $this->ensureStargateColumn($pdo, 'is_regional_gate', 'TINYINT(1) NOT NULL DEFAULT 0');
+        $this->ensureStargateColumn($pdo, 'is_constellation_boundary', 'TINYINT(1) NOT NULL DEFAULT 0');
+        $this->ensureStargateColumn($pdo, 'is_region_boundary', 'TINYINT(1) NOT NULL DEFAULT 0');
         $this->ensureStargateIndex($pdo, 'idx_regional_gate', 'is_regional_gate');
+        $this->ensureStargateIndex($pdo, 'idx_constellation_boundary', 'is_constellation_boundary');
+        $this->ensureStargateIndex($pdo, 'idx_region_boundary', 'is_region_boundary');
         $this->ensureSystemColumn($pdo, 'has_npc_station', 'TINYINT(1) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'npc_station_count', 'INT NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'security_raw', 'DECIMAL(4,2) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'security_nav', 'DECIMAL(4,2) NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'sec_class', 'VARCHAR(16) NOT NULL DEFAULT \'null\'');
+        $this->ensureSystemColumn($pdo, 'near_constellation_boundary', 'TINYINT(1) NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'near_region_boundary', 'TINYINT(1) NOT NULL DEFAULT 0');
+        $this->ensureSystemColumn($pdo, 'legal_mask', 'BIGINT UNSIGNED NOT NULL DEFAULT 0');
+        $this->ensureSystemIndex($pdo, 'idx_systems_sec_class', 'sec_class');
+        $this->ensureSystemIndex($pdo, 'idx_systems_near_constellation_boundary', 'near_constellation_boundary');
+        $this->ensureSystemIndex($pdo, 'idx_systems_near_region_boundary', 'near_region_boundary');
+        $this->ensureSystemIndex($pdo, 'idx_systems_legal_mask', 'legal_mask');
         $this->ensureSystemColumn($pdo, 'is_wormhole', 'TINYINT(1) NOT NULL DEFAULT 0');
         $this->ensureSystemColumn($pdo, 'is_normal_universe', 'TINYINT(1) NOT NULL DEFAULT 0');
     }
@@ -226,6 +252,15 @@ final class SdeImporter
         $pdo->exec(sprintf('CREATE INDEX %s ON stargates (%s)', $index, $column));
     }
 
+
+    private function ensureSystemIndex(PDO $pdo, string $index, string $column): void
+    {
+        if ($this->tableHasIndex($pdo, 'systems', $index)) {
+            return;
+        }
+
+        $pdo->exec(sprintf('CREATE INDEX %s ON systems (%s)', $index, $column));
+    }
     private function ensureSystemColumn(PDO $pdo, string $column, string $definition): void
     {
         if (!$this->tableHasColumn($pdo, 'systems', $column)) {
@@ -250,7 +285,7 @@ final class SdeImporter
                 $this->insertBatch(
                     $pdo,
                     'systems_stage',
-                    ['id', 'name', 'security', 'security_raw', 'security_nav', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
+                    ['id', 'name', 'security', 'security_raw', 'security_nav', 'sec_class', 'near_constellation_boundary', 'near_region_boundary', 'legal_mask', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
                     $batch
                 );
                 $batch = [];
@@ -262,7 +297,7 @@ final class SdeImporter
             $this->insertBatch(
                 $pdo,
                 'systems_stage',
-                ['id', 'name', 'security', 'security_raw', 'security_nav', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
+                ['id', 'name', 'security', 'security_raw', 'security_nav', 'sec_class', 'near_constellation_boundary', 'near_region_boundary', 'legal_mask', 'region_id', 'constellation_id', 'is_wormhole', 'is_normal_universe', 'has_npc_station', 'npc_station_count', 'x', 'y', 'z', 'system_size_au', 'updated_at'],
                 $batch
             );
         }
@@ -472,14 +507,24 @@ final class SdeImporter
             return;
         }
 
+        $hasConstellationBoundary = $this->tableHasColumn($pdo, 'stargates', 'is_constellation_boundary');
+        $hasRegionBoundary = $this->tableHasColumn($pdo, 'stargates', 'is_region_boundary');
+
+        $setClauses = [
+            's.is_regional_gate = CASE WHEN a.region_id IS NOT NULL AND b.region_id IS NOT NULL AND a.region_id <> b.region_id THEN 1 ELSE 0 END',
+        ];
+        if ($hasConstellationBoundary) {
+            $setClauses[] = 's.is_constellation_boundary = CASE WHEN a.constellation_id IS NOT NULL AND b.constellation_id IS NOT NULL AND a.constellation_id <> b.constellation_id THEN 1 ELSE 0 END';
+        }
+        if ($hasRegionBoundary) {
+            $setClauses[] = 's.is_region_boundary = CASE WHEN a.region_id IS NOT NULL AND b.region_id IS NOT NULL AND a.region_id <> b.region_id THEN 1 ELSE 0 END';
+        }
+
         $pdo->exec(
             'UPDATE stargates s
             JOIN systems a ON s.from_system_id = a.id
             JOIN systems b ON s.to_system_id = b.id
-            SET s.is_regional_gate = CASE
-                WHEN a.region_id IS NOT NULL AND b.region_id IS NOT NULL AND a.region_id <> b.region_id THEN 1
-                ELSE 0
-            END'
+            SET ' . implode(', ', $setClauses)
         );
     }
 
@@ -548,6 +593,10 @@ final class SdeImporter
             'security' => $securityNav,
             'security_raw' => $securityRaw,
             'security_nav' => $securityNav,
+            'sec_class' => 'null',
+            'near_constellation_boundary' => 0,
+            'near_region_boundary' => 0,
+            'legal_mask' => 0,
             'region_id' => $regionId !== null ? (int) $regionId : null,
             'constellation_id' => $constellationId !== null ? (int) $constellationId : null,
             'is_wormhole' => $isWormhole ? 1 : 0,

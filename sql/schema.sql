@@ -4,6 +4,10 @@ CREATE TABLE IF NOT EXISTS systems (
     security DECIMAL(4,2) NOT NULL,
     security_raw DECIMAL(4,2) NOT NULL,
     security_nav DECIMAL(4,2) NOT NULL,
+    sec_class VARCHAR(16) NOT NULL DEFAULT 'null',
+    near_constellation_boundary TINYINT(1) NOT NULL DEFAULT 0,
+    near_region_boundary TINYINT(1) NOT NULL DEFAULT 0,
+    legal_mask BIGINT UNSIGNED NOT NULL DEFAULT 0,
     region_id BIGINT NULL,
     constellation_id BIGINT NULL,
     is_wormhole TINYINT(1) NOT NULL DEFAULT 0,
@@ -14,7 +18,11 @@ CREATE TABLE IF NOT EXISTS systems (
     y DOUBLE NOT NULL DEFAULT 0,
     z DOUBLE NOT NULL DEFAULT 0,
     system_size_au DOUBLE NOT NULL DEFAULT 1.0,
-    updated_at DATETIME NOT NULL
+    updated_at DATETIME NOT NULL,
+    INDEX idx_systems_sec_class (sec_class),
+    INDEX idx_systems_near_constellation_boundary (near_constellation_boundary),
+    INDEX idx_systems_near_region_boundary (near_region_boundary),
+    INDEX idx_systems_legal_mask (legal_mask)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS stargates (
@@ -22,10 +30,14 @@ CREATE TABLE IF NOT EXISTS stargates (
     from_system_id BIGINT NOT NULL,
     to_system_id BIGINT NOT NULL,
     is_regional_gate TINYINT(1) NOT NULL DEFAULT 0,
+    is_constellation_boundary TINYINT(1) NOT NULL DEFAULT 0,
+    is_region_boundary TINYINT(1) NOT NULL DEFAULT 0,
     updated_at DATETIME NOT NULL,
     INDEX idx_from_system (from_system_id),
     INDEX idx_to_system (to_system_id),
     INDEX idx_regional_gate (is_regional_gate),
+    INDEX idx_constellation_boundary (is_constellation_boundary),
+    INDEX idx_region_boundary (is_region_boundary),
     CONSTRAINT fk_stargate_from FOREIGN KEY (from_system_id) REFERENCES systems (id) ON DELETE CASCADE,
     CONSTRAINT fk_stargate_to FOREIGN KEY (to_system_id) REFERENCES systems (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
