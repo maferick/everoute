@@ -103,6 +103,13 @@ final class NavigationEngine
         $best = (string) ($selection['best'] ?? 'none');
         $bestSelectionReason = (string) ($selection['reason'] ?? 'no_feasible_routes');
         $explanation = $this->buildExplanation($best, $gateRoute, $jumpRoute, $hybridRoute, $options, $bestSelectionReason);
+        $selectedRoute = match ($best) {
+            'gate' => $gateRoute,
+            'jump' => $jumpRoute,
+            'hybrid' => $hybridRoute,
+            default => [],
+        };
+
         $payload = [
             'gate_route' => $gateRoute,
             'jump_route' => $jumpRoute,
@@ -111,6 +118,10 @@ final class NavigationEngine
             'best_selection_reason' => $bestSelectionReason,
             'dominance_rule_applied' => !empty($selection['dominance_rule_applied']),
             'extra_gate_penalty' => $selection['extra_gate_penalty'] ?? [],
+            'fallback_warning' => !empty($selectedRoute['fallback_warning']),
+            'fallback_message' => $selectedRoute['fallback_message'] ?? null,
+            'chosen_route_lowsec_count' => (int) ($selectedRoute['lowsec_count'] ?? 0),
+            'chosen_route_nullsec_count' => (int) ($selectedRoute['nullsec_count'] ?? 0),
             'explanation' => $explanation,
             'effective_range_ly' => $effectiveRange,
             'scoring' => $weights,
@@ -170,14 +181,15 @@ final class NavigationEngine
 
     private function computeGateRoute(int $startId, int $endId, string $shipType, array $options): array
     {
-        $route = $this->computeGateRouteAttempt($startId, $endId, $shipType, $options);
+        $attemptOptions = $this->optionsForPrimaryAvoidAttempt($options);
+        $route = $this->computeGateRouteAttempt($startId, $endId, $shipType, $attemptOptions);
         $fallbackUsed = false;
-        if ($this->shouldAttemptFallback($route, $options)) {
-            $relaxedOptions = $this->relaxAvoidOptions($options);
+        if ($this->shouldAttemptFallback($route, $attemptOptions)) {
+            $relaxedOptions = $this->relaxAvoidOptions($attemptOptions);
             $route = $this->computeGateRouteAttempt($startId, $endId, $shipType, $relaxedOptions);
             $fallbackUsed = true;
         }
-        return $this->withRouteMeta($route, $fallbackUsed);
+        return $this->withRouteMeta($route, $fallbackUsed, $options, $attemptOptions);
     }
 
     private function computeGateRouteAttempt(int $startId, int $endId, string $shipType, array $options): array
@@ -322,14 +334,15 @@ final class NavigationEngine
         ?int $rangeBucket,
         array $options
     ): array {
-        $route = $this->computeJumpRouteAttempt($startId, $endId, $shipType, $effectiveRange, $rangeBucket, $options);
+        $attemptOptions = $this->optionsForPrimaryAvoidAttempt($options);
+        $route = $this->computeJumpRouteAttempt($startId, $endId, $shipType, $effectiveRange, $rangeBucket, $attemptOptions);
         $fallbackUsed = false;
-        if ($this->shouldAttemptFallback($route, $options)) {
-            $relaxedOptions = $this->relaxAvoidOptions($options);
+        if ($this->shouldAttemptFallback($route, $attemptOptions)) {
+            $relaxedOptions = $this->relaxAvoidOptions($attemptOptions);
             $route = $this->computeJumpRouteAttempt($startId, $endId, $shipType, $effectiveRange, $rangeBucket, $relaxedOptions);
             $fallbackUsed = true;
         }
-        return $this->withRouteMeta($route, $fallbackUsed);
+        return $this->withRouteMeta($route, $fallbackUsed, $options, $attemptOptions);
     }
 
     private function computeJumpRouteAttempt(
@@ -480,6 +493,7 @@ final class NavigationEngine
         array $jumpBaseline,
         array $options
     ): array {
+        $attemptOptions = $this->optionsForPrimaryAvoidAttempt($options);
         $route = $this->computeHybridRouteAttempt(
             $startId,
             $endId,
@@ -488,11 +502,11 @@ final class NavigationEngine
             $rangeBucket,
             $gateBaseline,
             $jumpBaseline,
-            $options
+            $attemptOptions
         );
         $fallbackUsed = false;
-        if ($this->shouldAttemptFallback($route, $options)) {
-            $relaxedOptions = $this->relaxAvoidOptions($options);
+        if ($this->shouldAttemptFallback($route, $attemptOptions)) {
+            $relaxedOptions = $this->relaxAvoidOptions($attemptOptions);
             $route = $this->computeHybridRouteAttempt(
                 $startId,
                 $endId,
@@ -505,7 +519,7 @@ final class NavigationEngine
             );
             $fallbackUsed = true;
         }
-        $route = $this->withRouteMeta($route, $fallbackUsed);
+        $route = $this->withRouteMeta($route, $fallbackUsed, $options, $attemptOptions);
         return $this->withHybridFatigueDetails($route, $options);
     }
 
@@ -1068,6 +1082,18 @@ final class NavigationEngine
         return $strictness === 'strict';
     }
 
+    private function optionsForPrimaryAvoidAttempt(array $options): array
+    {
+        if (empty($options['avoid_lowsec']) && empty($options['avoid_nullsec'])) {
+            $options['avoid_strictness'] = 'soft';
+            return $options;
+        }
+
+        $requested = strtolower((string) ($options['avoid_strictness'] ?? 'strict'));
+        $options['avoid_strictness'] = $requested === 'soft' ? 'soft' : 'strict';
+        return $options;
+    }
+
     private function relaxAvoidOptions(array $options): array
     {
         $options['avoid_strictness'] = 'soft';
@@ -1097,9 +1123,21 @@ final class NavigationEngine
         return true;
     }
 
-    private function withRouteMeta(array $route, bool $fallbackUsed): array
+    private function withRouteMeta(array $route, bool $fallbackUsed, array $requestedOptions, array $attemptOptions): array
     {
         $route['fallback_used'] = $fallbackUsed;
+        $requestedStrictness = strtolower((string) ($requestedOptions['avoid_strictness']
+            ?? ((empty($requestedOptions['avoid_lowsec']) && empty($requestedOptions['avoid_nullsec'])) ? 'soft' : 'strict')));
+        $route['requested_avoid_strictness'] = $requestedStrictness === 'soft' ? 'soft' : 'strict';
+        $route['applied_avoid_strictness'] = strtolower((string) ($attemptOptions['avoid_strictness'] ?? 'soft'));
+        if ($fallbackUsed) {
+            $route['applied_avoid_strictness'] = 'soft';
+            $route['fallback_warning'] = true;
+            $route['fallback_message'] = 'Strict avoid filters produced no feasible route; returned best effort route using soft avoid penalties.';
+        } else {
+            $route['fallback_warning'] = false;
+            $route['fallback_message'] = null;
+        }
         $systems = is_array($route['systems'] ?? null) ? $route['systems'] : [];
         $route['space_types'] = $this->spaceTypesUsed($systems);
         return $route;
@@ -2467,13 +2505,16 @@ final class NavigationEngine
         if ($best === 'gate') {
             $reasons[] = 'Gate-only route avoids jump fatigue considerations.';
         }
+        $selected = match ($best) {
+            'gate' => $gate,
+            'jump' => $jump,
+            'hybrid' => $hybrid,
+            default => [],
+        };
+        if (!empty($selected['fallback_used'])) {
+            $reasons[] = 'Best effort route: strict avoid filters found no feasible path, so soft avoid penalties were used.';
+        }
         if (!empty($options['prefer_npc'])) {
-            $selected = match ($best) {
-                'gate' => $gate,
-                'jump' => $jump,
-                'hybrid' => $hybrid,
-                default => [],
-            };
             $npcCount = (int) ($selected['npc_stations_in_route'] ?? 0);
             if ($npcCount > 0) {
                 $reasons[] = sprintf('Selected %d systems with NPC stations (toggle enabled).', $npcCount);
