@@ -81,6 +81,17 @@ php bin/console cache:warm
 ## Offline Precompute Jobs (SDE-stable)
 These jobs are heavy and intended for long-running offline execution. They are resumable via DB checkpoints and safe to stop/restart. All outputs remain valid until the SDE/map changes.
 
+### Run all precomputes (recommended)
+Orchestrates `precompute:system-facts`, `map:derive`, `precompute:gate-distances`, and `jump:precompute` in order. The command prints start/finish logs per step and stops immediately if any step fails.
+```bash
+# typical incremental refresh
+php bin/console precompute:all --hours=1
+
+# full long run with resumable heavy steps
+php bin/console precompute:all --hours=24 --resume --max-hops=20 --ranges=5,6,7,8,9,10
+```
+Expected runtime: seconds for `precompute:system-facts` and `map:derive`; minutes to many hours for gate distances and jump neighbors depending on hardware, database performance, and selected options.
+
 ### System facts (fast)
 Recompute regional gates and NPC station flags:
 ```bash
