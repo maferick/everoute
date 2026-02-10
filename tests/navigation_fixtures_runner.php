@@ -168,6 +168,34 @@ assertSameStrict($fixture3['selection']['best'] ?? '', 'jump', 'Fixture 3 should
 assertTrueStrict(((float) ($fixture3['jump']['penalties_bonuses']['npc_bonus'] ?? 0.0)) < 0.0, 'Fixture 3 jump route should include npc bonus.');
 assertTrueStrict(((float) ($fixture3['gate']['penalties_bonuses']['npc_bonus'] ?? 0.0)) === 0.0, 'Fixture 3 gate route should not include npc bonus.');
 
+// Fixture 3b: prefer_npc may allow a bounded +1 hop detour only when safety-leaning.
+$npcDetourSystems = [
+    ['id' => 1, 'security' => 0.5],
+    ['id' => 2, 'security' => 0.5],
+    ['id' => 3, 'security' => 0.5],
+    ['id' => 4, 'security' => 0.5],
+    ['id' => 5, 'security' => 0.5],
+];
+$fixture3bSpeed = scoreAndSelect(
+    $reflection,
+    $engine,
+    routeFixture(true, 3, 0.0, $npcDetourSystems, 0),
+    routeFixture(true, 4, 0.0, $npcDetourSystems, 4),
+    routeFixture(false, 0, 0.0, [], 0),
+    ['safety_vs_speed' => 20, 'prefer_npc' => true]
+);
+assertSameStrict($fixture3bSpeed['selection']['best'] ?? '', 'gate', 'Fixture 3b speed-leaning should keep shorter non-NPC route.');
+
+$fixture3bSafety = scoreAndSelect(
+    $reflection,
+    $engine,
+    routeFixture(true, 3, 0.0, $npcDetourSystems, 0),
+    routeFixture(true, 4, 0.0, $npcDetourSystems, 4),
+    routeFixture(false, 0, 0.0, [], 0),
+    ['safety_vs_speed' => 80, 'prefer_npc' => true]
+);
+assertSameStrict($fixture3bSafety['selection']['best'] ?? '', 'jump', 'Fixture 3b safety-leaning should allow +1 hop NPC detour.');
+
 // Fixture 4: high-risk gate hotspot (safety => safer reroute).
 $fixture4 = scoreAndSelect(
     $reflection,
@@ -189,18 +217,18 @@ if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
 
 $connection = new Connection('sqlite::memory:', '', '');
 $pdo = $connection->pdo();
-$pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, security_raw REAL, security_nav REAL, region_id INTEGER, constellation_id INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
+$pdo->exec('CREATE TABLE systems (id INTEGER PRIMARY KEY, name TEXT, security REAL, security_raw REAL, security_nav REAL, region_id INTEGER, constellation_id INTEGER, is_wormhole INTEGER, is_normal_universe INTEGER, has_npc_station INTEGER, npc_station_count INTEGER, system_size_au REAL, x REAL, y REAL, z REAL)');
 $pdo->exec('CREATE TABLE stargates (from_system_id INTEGER, to_system_id INTEGER, is_regional_gate INTEGER)');
 $pdo->exec('CREATE TABLE system_risk (system_id INTEGER, ship_kills_1h INTEGER, pod_kills_1h INTEGER, npc_kills_1h INTEGER, updated_at TEXT, risk_updated_at TEXT, kills_last_1h INTEGER, kills_last_24h INTEGER, pod_kills_last_1h INTEGER, pod_kills_last_24h INTEGER, last_updated_at TEXT)');
 $pdo->exec('CREATE TABLE jump_neighbors (system_id INTEGER, range_ly INTEGER, neighbor_count INTEGER, neighbor_ids_blob BLOB, encoding_version INTEGER, updated_at TEXT)');
 
 $metersPerLy = JumpMath::METERS_PER_LY;
 $systems = [
-    [11, 'A-Low', 0.2, 0.2, 0.2, 1, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
-    [12, 'B-Low', 0.2, 0.2, 0.2, 1, 1, 0, 0, 1.0, 6 * $metersPerLy, 0.0, 0.0],
-    [13, 'C-Low', 0.2, 0.2, 0.2, 1, 1, 0, 0, 1.0, 12 * $metersPerLy, 0.0, 0.0],
+    [11, 'A-Low', 0.2, 0.2, 0.2, 1, 1, 0, 1, 0, 0, 1.0, 0.0, 0.0, 0.0],
+    [12, 'B-Low', 0.2, 0.2, 0.2, 1, 1, 0, 1, 0, 0, 1.0, 6 * $metersPerLy, 0.0, 0.0],
+    [13, 'C-Low', 0.2, 0.2, 0.2, 1, 1, 0, 1, 0, 0, 1.0, 12 * $metersPerLy, 0.0, 0.0],
 ];
-$stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+$stmt = $pdo->prepare('INSERT INTO systems VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
 foreach ($systems as $system) {
     $stmt->execute($system);
     $pdo->prepare('INSERT INTO system_risk VALUES (?, 0, 0, 0, ?, ?, 0, 0, 0, 0, ?)')->execute([$system[0], gmdate('c'), gmdate('c'), gmdate('c')]);
