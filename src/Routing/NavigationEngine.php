@@ -7,6 +7,9 @@ namespace Everoute\Routing;
 if (!class_exists(SecurityNav::class)) {
     require_once __DIR__ . '/SecurityNav.php';
 }
+if (!class_exists(PreferenceProfile::class)) {
+    require_once __DIR__ . '/PreferenceProfile.php';
+}
 
 use Everoute\Config\Env;
 use Everoute\Risk\RiskRepository;
@@ -88,6 +91,7 @@ final class NavigationEngine
 
         $shipType = $this->resolveShipType($options);
         $options = $this->withResolvedFuelOptions($options, $shipType);
+        $options = $this->withResolvedPreferenceProfile($options);
         $jumpSkillLevel = (int) ($options['jump_skill_level'] ?? 0);
         $effectiveRange = $this->jumpRangeCalculator->effectiveRange($shipType, $jumpSkillLevel);
         $rangeBucketFloor = $effectiveRange !== null ? (int) floor($effectiveRange) : null;
@@ -151,6 +155,8 @@ final class NavigationEngine
             'weights_used' => $weights,
             'fuel_per_ly_factor' => (float) ($options['fuel_per_ly_factor'] ?? 0.0),
             'jump_fuel_weight' => (float) ($options['jump_fuel_weight'] ?? 0.0),
+            'preference_profile' => (string) ($options['preference_profile'] ?? PreferenceProfile::BALANCED),
+            'profile_coefficients' => PreferenceProfile::coefficients((string) ($options['preference_profile'] ?? PreferenceProfile::BALANCED)),
         ];
 
         if ($debugEnabled) {
@@ -241,6 +247,15 @@ final class NavigationEngine
         return $options;
     }
 
+    private function withResolvedPreferenceProfile(array $options): array
+    {
+        $safety = max(0, min(100, (int) ($options['safety_vs_speed'] ?? 50)));
+        $requested = array_key_exists('preference_profile', $options) ? (string) $options['preference_profile'] : null;
+        $options['preference_profile'] = PreferenceProfile::resolve($requested, $safety);
+
+        return $options;
+    }
+
     private function defaultJumpFuelWeight(array $options): float
     {
         $mode = (string) ($options['mode'] ?? 'subcap');
@@ -254,6 +269,49 @@ final class NavigationEngine
         $weight = max(0.0, (float) ($options['jump_fuel_weight'] ?? $this->defaultJumpFuelWeight($options)));
 
         return $distanceLy * $factor * $weight;
+    }
+
+    /** @return array{base_gate_cost: float, base_jump_cost: float, risk_multiplier: float, sec_band_penalty_multiplier: float, fuel_multiplier: float, per_jump_constant: float} */
+    private function profileCoefficients(array $options): array
+    {
+        return PreferenceProfile::coefficients((string) ($options['preference_profile'] ?? PreferenceProfile::BALANCED));
+    }
+
+    private function gateEdgeCost(array $profile, string $preference, array $options, bool $includeRisk = false): float
+    {
+        $coefficients = $this->profileCoefficients($options);
+        $cost = $this->gateStepCost($preference, $profile)
+            + $this->npcStationStepBonus($profile, $options)
+            + $this->avoidPenalty($profile, $options)
+            + (float) ($coefficients['base_gate_cost'] ?? 0.0);
+
+        if ($includeRisk) {
+            $cost += ((float) ($profile['risk_penalty'] ?? 0.0)) * $this->riskWeight($options);
+        }
+
+        return $cost;
+    }
+
+    private function jumpEdgeCost(float $distance, string $shipType, array $profile, array $options): float
+    {
+        $coefficients = $this->profileCoefficients($options);
+        $metrics = $this->fatigueModel->lookupHopMetricsForShipType($shipType, $distance);
+        $fatigue = (float) ($metrics['jump_fatigue_minutes'] ?? 0.0);
+        $cooldown = (float) ($metrics['jump_activation_minutes'] ?? 0.0);
+        $riskCost = ((float) ($profile['risk_penalty'] ?? 0.0)) * $this->riskWeight($options);
+        $secBandCost = ((float) ($profile['security_penalty'] ?? 0.0) / 100.0) * (float) ($coefficients['sec_band_penalty_multiplier'] ?? 0.0);
+        $fuelCost = $this->jumpFuelEdgeCost($distance, $options) * (float) ($coefficients['fuel_multiplier'] ?? 1.0);
+
+        return (float) ($coefficients['base_jump_cost'] ?? 0.0)
+            + $distance
+            + $fatigue
+            + $cooldown
+            + $fuelCost
+            + $riskCost
+            + $secBandCost
+            + (float) ($coefficients['per_jump_constant'] ?? 0.0)
+            + $this->npcStationStepBonus($profile, $options)
+            + $this->avoidPenalty($profile, $options);
     }
 
     private function computeGateRoute(int $startId, int $endId, string $shipType, array $options): array
@@ -341,9 +399,6 @@ final class NavigationEngine
         }
 
         $dijkstra = new Dijkstra();
-        if (!$useSubcapPolicy) {
-            $this->riskWeightCache = $this->riskWeight($options);
-        }
         $result = $dijkstra->shortestPath(
             $neighbors,
             $startId,
@@ -353,16 +408,7 @@ final class NavigationEngine
                 if ($profile === null) {
                     return INF;
                 }
-                if ($useSubcapPolicy) {
-                    return $this->gateStepCost($preference, $profile)
-                        + $this->npcStationStepBonus($profile, $options)
-                        + $this->avoidPenalty($profile, $options);
-                }
-                $riskScore = $profile['risk_penalty'];
-                return 1.0
-                    + ($riskScore * $this->riskWeightCache)
-                    + $this->npcStationStepBonus($profile, $options)
-                    + $this->avoidPenalty($profile, $options);
+                return $this->gateEdgeCost($profile, $preference, $options, !$useSubcapPolicy);
             },
             null,
             $useSubcapPolicy ? $policy['allowed'] : null,
@@ -406,8 +452,6 @@ final class NavigationEngine
         $summary['exception_corridor'] = $policy['exception'];
         return $summary;
     }
-
-    private float $riskWeightCache = 0.0;
 
     private function computeJumpRoute(
         int $startId,
@@ -505,24 +549,13 @@ final class NavigationEngine
         }
 
         $dijkstra = new Dijkstra();
-        $this->riskWeightCache = $this->riskWeight($options);
         $costFn = function (int $from, int $to, mixed $edgeData) use ($options, $shipType): float {
             $profile = $this->baseCostProfiles[$to] ?? null;
             if ($profile === null) {
                 return INF;
             }
             $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
-            $metrics = $this->fatigueModel->lookupHopMetricsForShipType($shipType, $distance);
-            $fatigue = $metrics['jump_fatigue_minutes'];
-            $cooldown = $metrics['jump_activation_minutes'];
-            $riskScore = $profile['risk_penalty'];
-            return $distance
-                + $fatigue
-                + $cooldown
-                + $this->jumpFuelEdgeCost($distance, $options)
-                + ($riskScore * $this->riskWeightCache)
-                + $this->npcStationStepBonus($profile, $options)
-                + $this->avoidPenalty($profile, $options);
+            return $this->jumpEdgeCost($distance, $shipType, $profile, $options);
         };
         $result = $dijkstra->shortestPath($graph['neighbors'], $startId, $endId, $costFn, null, null, 50000);
 
@@ -911,7 +944,6 @@ final class NavigationEngine
         $preference = $this->normalizeGatePreference($options);
         $minHybridSelectionImprovement = max(0.0, (float) ($options['hybrid_min_selection_improvement'] ?? 0.01));
         $dijkstra = new Dijkstra();
-        $this->riskWeightCache = $this->riskWeight($options);
         $result = $dijkstra->shortestPath(
             $neighbors,
             $startId,
@@ -924,21 +956,10 @@ final class NavigationEngine
                 $edgeType = (string) ($edgeData['type'] ?? 'gate');
                 if ($edgeType === 'jump') {
                     $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
-                    $metrics = $this->fatigueModel->lookupHopMetricsForShipType($shipType, $distance);
-                    $fatigue = (float) ($metrics['jump_fatigue_minutes'] ?? 0.0);
-                    $cooldown = (float) ($metrics['jump_activation_minutes'] ?? 0.0);
-                    return $distance
-                        + $fatigue
-                        + $cooldown
-                        + $this->jumpFuelEdgeCost($distance, $options)
-                        + ((float) $profile['risk_penalty'] * $this->riskWeightCache)
-                        + $this->npcStationStepBonus($profile, $options)
-                        + $this->avoidPenalty($profile, $options);
+                    return $this->jumpEdgeCost($distance, $shipType, $profile, $options);
                 }
 
-                return $this->gateStepCost($preference, $profile)
-                    + $this->npcStationStepBonus($profile, $options)
-                    + $this->avoidPenalty($profile, $options);
+                return $this->gateEdgeCost($profile, $preference, $options);
             },
             null,
             null,
@@ -1109,7 +1130,6 @@ final class NavigationEngine
 
         $boundedCandidates = $this->boundedJumpCandidateSet($startId, $endId, $rangeBucket);
         $jumpNeighbors = $this->buildHybridJumpNeighbors($neighbors, $boundedCandidates);
-        $this->riskWeightCache = $this->riskWeight($options);
         $dijkstra = new Dijkstra();
         $bestPlan = null;
         $bestCost = INF;
@@ -1159,14 +1179,8 @@ final class NavigationEngine
                             return INF;
                         }
                         $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
-                        $cooldown = $this->estimateJumpCooldownMinutes($shipType, $distance);
-                        $riskScore = $profile['risk_penalty'];
-                        return $distance
-                            + $cooldown
-                            + $this->jumpFuelEdgeCost($distance, $options)
-                            + ($riskScore * $this->riskWeightCache)
-                            + $this->npcStationStepBonus($profile, $options)
-                            + $this->avoidPenalty($profile, $options);
+
+                        return $this->jumpEdgeCost($distance, $shipType, $profile, $options);
                     },
                     function (int $node) use ($shipType, $options): bool {
                         $system = $this->systems[$node] ?? null;
@@ -1485,9 +1499,7 @@ final class NavigationEngine
         if ($profile === null) {
             return INF;
         }
-        return $this->gateStepCost($preference, $profile)
-            + $this->npcStationStepBonus($profile, $options)
-            + $this->avoidPenalty($profile, $options);
+        return $this->gateEdgeCost($profile, $preference, $options);
     }
 
     private function runGateDijkstraRaw(array $neighbors, int $startId, int $endId, array $options, string $preference, ?array $allowed = null): array
@@ -2089,7 +2101,6 @@ final class NavigationEngine
             }
 
             $dijkstra = new Dijkstra();
-            $this->riskWeightCache = $this->riskWeight($options);
             $result = $dijkstra->shortestPath(
                 $graph['neighbors'],
                 $startId,
@@ -2100,16 +2111,7 @@ final class NavigationEngine
                         return INF;
                     }
                     $distance = (float) ($edgeData['distance_ly'] ?? 0.0);
-                    $metrics = $this->fatigueModel->lookupHopMetricsForShipType($shipType, $distance);
-                    $fatigue = $metrics['jump_fatigue_minutes'];
-                    $cooldown = $metrics['jump_activation_minutes'];
-                    $riskScore = $profile['risk_penalty'];
-                    return $distance
-                        + $fatigue
-                        + $cooldown
-                        + $this->jumpFuelEdgeCost($distance, $options)
-                        + ($riskScore * $this->riskWeightCache)
-                        + $this->avoidPenalty($profile, $options);
+                    return $this->jumpEdgeCost($distance, $shipType, $profile, $options);
                 },
                 null,
                 null,
@@ -2580,8 +2582,9 @@ final class NavigationEngine
 
     private function riskWeight(array $options): float
     {
-        $safety = max(0, min(100, (int) ($options['safety_vs_speed'] ?? 50)));
-        return 0.2 + ($safety / 100) * 0.8;
+        $coefficients = $this->profileCoefficients($options);
+
+        return max(0.0, (float) ($coefficients['risk_multiplier'] ?? 0.0));
     }
 
     private function isCapitalShipType(string $shipType): bool

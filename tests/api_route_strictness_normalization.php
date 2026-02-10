@@ -47,7 +47,10 @@ if (file_exists($autoload)) {
     require_once __DIR__ . '/../src/Security/Validator.php';
     require_once __DIR__ . '/../src/Universe/JumpNeighborCodec.php';
     require_once __DIR__ . '/../src/Universe/JumpNeighborRepository.php';
+    require_once __DIR__ . '/../src/Universe/StaticTableResolver.php';
+    require_once __DIR__ . '/../src/Universe/StaticMetaRepository.php';
     require_once __DIR__ . '/../src/Universe/StargateRepository.php';
+    require_once __DIR__ . '/../src/Universe/ConstellationGraphRepository.php';
     require_once __DIR__ . '/../src/Universe/SystemRepository.php';
     require_once __DIR__ . '/../src/Risk/RiskRepository.php';
     require_once __DIR__ . '/../src/Risk/RiskScorer.php';
@@ -65,6 +68,8 @@ $pdo->exec('CREATE TABLE stargates (from_system_id INTEGER, to_system_id INTEGER
 $pdo->exec('CREATE TABLE system_risk (system_id INTEGER, ship_kills_1h INTEGER, pod_kills_1h INTEGER, npc_kills_1h INTEGER, updated_at TEXT, risk_updated_at TEXT, kills_last_1h INTEGER, kills_last_24h INTEGER, pod_kills_last_1h INTEGER, pod_kills_last_24h INTEGER, last_updated_at TEXT)');
 $pdo->exec('CREATE TABLE jump_neighbors (system_id INTEGER, range_ly INTEGER, neighbor_count INTEGER, neighbor_ids_blob BLOB, encoding_version INTEGER, updated_at TEXT)');
 $pdo->exec('CREATE TABLE risk_meta (provider TEXT PRIMARY KEY, updated_at TEXT, last_modified TEXT)');
+$pdo->exec('CREATE TABLE static_meta (id INTEGER PRIMARY KEY, active_sde_build_number INTEGER NULL, precompute_version INTEGER NOT NULL, built_at TEXT NOT NULL, active_build_id TEXT NULL)');
+$pdo->prepare('INSERT INTO static_meta (id, active_sde_build_number, precompute_version, built_at, active_build_id) VALUES (1, NULL, 1, ?, NULL)')->execute([gmdate('c')]);
 
 $metersPerLy = JumpMath::METERS_PER_LY;
 $systems = [
@@ -194,6 +199,33 @@ if ((int) ($safetyPayload['selected_policy']['npc_detour_max_extra_jumps'] ?? -1
 }
 if (!in_array('NPC detour policy: safety side at 51% (may accept +1 jump detour for NPC coverage).', (array) ($safetyPayload['explanation'] ?? []), true)) {
     throw new RuntimeException('Explanation should include selected NPC detour policy details.');
+}
+
+
+$profileDefaultBody = $baseBody;
+$profileDefaultBody['safety_vs_speed'] = 80;
+unset($profileDefaultBody['preference_profile']);
+$profileDefaultRequest = new Request('POST', '/api/route', [], $profileDefaultBody, [], '127.0.0.1');
+$profileDefaultResponse = $controller->route($profileDefaultRequest);
+$profileDefaultPayload = json_decode($profileDefaultResponse->body, true);
+if (!is_array($profileDefaultPayload)) {
+    throw new RuntimeException('Expected JSON payload for safety-derived preference profile request.');
+}
+if (($profileDefaultPayload['preference_profile'] ?? '') !== 'safety') {
+    throw new RuntimeException('safety_vs_speed compatibility mapping should derive safety preference profile.');
+}
+
+$profileExplicitBody = $baseBody;
+$profileExplicitBody['safety_vs_speed'] = 80;
+$profileExplicitBody['preference_profile'] = 'speed';
+$profileExplicitRequest = new Request('POST', '/api/route', [], $profileExplicitBody, [], '127.0.0.1');
+$profileExplicitResponse = $controller->route($profileExplicitRequest);
+$profileExplicitPayload = json_decode($profileExplicitResponse->body, true);
+if (!is_array($profileExplicitPayload)) {
+    throw new RuntimeException('Expected JSON payload for explicit preference profile request.');
+}
+if (($profileExplicitPayload['preference_profile'] ?? '') !== 'speed') {
+    throw new RuntimeException('Explicit preference_profile should override safety_vs_speed compatibility mapping.');
 }
 
 echo "API strictness normalization test passed.\n";
